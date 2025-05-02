@@ -358,7 +358,7 @@ if st.session_state.get("view") == "Generate ID":
             }
 
             # Save the full shipment data to MongoDB
-            shipments_collection.insert_one(shipment_data)
+            # shipments_collection.insert_one(shipment_data)
 
             # --- Generate PDF (excluding Trucks and Trailers) ---
             pdf = FPDF()
@@ -381,9 +381,9 @@ if st.session_state.get("view") == "Generate ID":
                     pdf.cell(90, 10, str(value), border=1)
                     pdf.ln()
 
-            # Save the PDF file
-            # pdf_output_path = "/tmp/shipment_document.pdf"
-            # pdf.output(pdf_output_path)
+            # Save the PDF file to a valid path
+            pdf_output_path = "/tmp/shipment_document.pdf"  # Define the file path here
+            pdf.output(pdf_output_path)
 
             # Provide download link for the generated PDF
             with open(pdf_output_path, "rb") as f:
