@@ -6,6 +6,11 @@ import uuid
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 import pandas as pd # Ensure pandas is imported if not already (it was)
+import streamlit as st
+from fpdf import FPDF
+from datetime import datetime
+import uuid
+
 
 # --- Set Page Config (MUST be the first Streamlit command) ---
 # This should be the very first Streamlit command called.
@@ -198,6 +203,7 @@ def generate_unique_id(transporter, cargo, file_number):
     return f"{transporter[:3].upper()}-{cargo[:3].upper()}-{file_number}-{timestamp}"
 
 # --- Content Area based on View Selection ---
+# --- Streamlit Setup ---
 if st.session_state.get("view") == "Generate ID":
     st.markdown("### 🎯 Generate a New Shipment ID")
 
@@ -249,9 +255,7 @@ if st.session_state.get("view") == "Generate ID":
     col7, col8 = st.columns(2)
     with col7:
         escorts_arranged = st.text_input("Escorts Arranged", max_chars=100, key="escorts_input")
-        cargo_description = st.text_input("Cargo Description", max_chars=100, key="cargo_description_input")
         loading_capacity = st.text_input("Loading Capacity", max_chars=50, key="loading_capacity_input")
-        loading_location = st.text_input("Loading Location", max_chars=100, key="loading_location_input")
     with col8:
         comments = st.text_area("Comments", max_chars=300, key="comments_input")
 
@@ -273,17 +277,6 @@ if st.session_state.get("view") == "Generate ID":
         borders.append(border_name.strip())
 
     # --- Trailer Customization ---
-    st.markdown("### 🚚 Add Trailers")
-    trailer_cols = st.columns([1, 6, 1])
-    with trailer_cols[0]:
-        if st.button("➖ Remove Trailer", key="dec_trailers") and st.session_state.num_trailers > 0:
-            st.session_state.num_trailers -= 1
-            st.rerun()
-    with trailer_cols[2]:
-        if st.button("➕ Add Trailer", key="inc_trailers"):
-            st.session_state.num_trailers += 1
-            st.rerun()
-
     trailers = []
     for i in range(st.session_state.num_trailers):
         trailer_type = st.text_input(f"Trailer {i+1} Type", key=f"trailer_type_{i}")
@@ -295,7 +288,9 @@ if st.session_state.get("view") == "Generate ID":
         if not all(required_fields):
             st.warning("Please fill in all required fields.")
         else:
-            unique_id = generate_unique_id(transporter, cargo, file_number)
+            # Generate Unique ID
+            unique_id = str(uuid.uuid4())
+
             trucks_array = []
 
             for i in range(truck_count):
@@ -310,35 +305,14 @@ if st.session_state.get("view") == "Generate ID":
                     "Driver contact number": "",
                     "Truck status": "Waiting to load",
                     "Current location": load_point,
-                    "ETA": None,
-                    "Load capacity": loading_capacity,
-                    "Actual arrival date": None,
-                    "Actual loading date": None,
-                    "Actual dispatch date": None,
-                    "Days on site": None,
-                    "Days exceeded free time": None,
-                    "Standing time/Demurrage": None,
-                    "Gross weight": None,
-                    "Net weight": None,
-                    "Lot number": "",
                     "Destination": offloading_point,
-                    "Standing time billable days": None,
-                    "Standing time charges": None,
-                    "Whiskey in": None,
-                    "Whiskey out": None,
-                    "Standing days": None,
-                    "Billable standing days": None,
-                    "Offloading arrival": None,
-                    "Date offloaded": None,
                     "Rate per Ton": rate_per_ton,
                     "Free Days at Border": free_days_border,
                     "Free Days at Offloading Point": free_days_offloading,
                     "Client": client_name,
                     "Transporter": transporter,
                     "Cargo Type": cargo,
-                    "Cargo description": cargo_description,
                     "Loading Point": load_point,
-                    "Loading location": loading_location,
                     "Truck Count": truck_count,
                     "File Number": file_number,
                     "Date": datetime.combine(date_submitted_manual, datetime.min.time()),
@@ -361,7 +335,6 @@ if st.session_state.get("view") == "Generate ID":
                 trucks_array.append(truck_data)
 
             shipment_data = {
-                "_id": str(uuid.uuid4()),
                 "Unique ID": unique_id,
                 "Date Submitted": datetime.combine(date_submitted_manual, datetime.min.time()),
                 "Transporter": transporter,
@@ -382,17 +355,46 @@ if st.session_state.get("view") == "Generate ID":
                 "Truck Type": truck_type,
                 "Free Days at Border": free_days_border,
                 "Free Days at Offloading Point": free_days_offloading,
-                "Borders": borders,
-                "Trucks": trucks_array,
             }
 
-            try:
-                shipments_collection.insert_one(shipment_data)
-                st.success("✅ Shipment data saved successfully to MongoDB!")
-                st.json(shipment_data)
-            except Exception as e:
-                st.error(f"❌ Error saving to MongoDB: {e}")
+            # Save the full shipment data to MongoDB
+            shipments_collection.insert_one(shipment_data)
 
+            # --- Generate PDF (excluding Trucks and Trailers) ---
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font('Arial', 'B', 12)
+            pdf.cell(200, 10, "Shipment Details", ln=True, align='C')
+
+            # Add table header
+            pdf.ln(10)
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(90, 10, "Field", border=1, align='C')
+            pdf.cell(90, 10, "Value", border=1, align='C')
+            pdf.ln()
+
+            # Add shipment info to PDF table (excluding 'Trucks' and 'Trailers')
+            pdf.set_font('Arial', '', 10)
+            for key, value in shipment_data.items():
+                if key not in ['Trucks', 'Trucks Count', 'Trailers']:  # Exclude trucks and trailers
+                    pdf.cell(90, 10, key, border=1)
+                    pdf.cell(90, 10, str(value), border=1)
+                    pdf.ln()
+
+            # Save the PDF file
+            # pdf_output_path = "/tmp/shipment_document.pdf"
+            # pdf.output(pdf_output_path)
+
+            # Provide download link for the generated PDF
+            with open(pdf_output_path, "rb") as f:
+                st.download_button(
+                    label="Download Shipment PDF",
+                    data=f,
+                    file_name="shipment_document.pdf",
+                    mime="application/pdf"
+                )
+
+            st.success("Shipment details saved and PDF generated successfully!")
 
 elif view == "All Past Shipment Metadata":
     st.markdown("## 📁 All Past Shipment IDs (Metadata View)")
@@ -425,16 +427,14 @@ elif view == "All Past Shipment Metadata":
         else:
              st.warning("Data is missing the 'Unique ID' column required for this view.")
 
-elif view == "Dashboard":
+if view == "Dashboard":
     st.markdown("## 📊 Shipment Dashboard")
     st.markdown("Get insights into submitted shipments, truck performance, and site activity.")
 
     # --- Filters Section ---
     df_filtered = df.copy()
-
     with st.sidebar:
         st.header("🔍 Filter Shipments")
-
         st.markdown("---")
 
         # Date Filter
@@ -487,6 +487,7 @@ elif view == "Dashboard":
     total_days_on_site = 0
     truck_count = 0
 
+    # Calculate the total trucks, charges, and days on site
     for _, row in df_filtered.iterrows():
         if "Trucks" in row and isinstance(row["Trucks"], list):
             total_trucks += len(row["Trucks"])
@@ -511,63 +512,203 @@ elif view == "Dashboard":
     st.subheader("📋 Shipment Overview")
     grouped_df = df_filtered.sort_values("Date Submitted", ascending=False)
 
-    for _, row in grouped_df.iterrows():
-        uid = row["Unique ID"]
-        client = row.get("Client", "Unknown")
-        transporter = row.get("Transporter", "Unknown")
-        trucks = row.get("Trucks", [])
-        date_submitted = row.get("Date Submitted")
-        truck_count = len(trucks)
 
-        # Determine Status
-        all_offloaded = all(truck.get("Date offloaded") for truck in trucks) if trucks else False
-        all_dispatched = all(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) if trucks else False
-        partial_dispatch = any(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) and not all_dispatched and not all_offloaded
+    # CSS for styling
+    st.markdown("""
+    <style>
+        /* Highlight selected rows */
+        tr[data-testid='stDataFrameRowSelected'] {
+            background-color: #e6f3ff !important;
+        }
+        
+        /* Style for cancelled trucks */
+        tr.cancelled-row {
+            background-color: #f5f5f5 !important;
+            color: #999 !important;
+            text-decoration: line-through;
+        }
+        
+        /* Style for the Cancel Truck button */
+        button.cancel-btn {
+            background-color: #ff4b4b;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        button.cancel-btn:hover {
+            background-color: #ff2b2b;
+        }
+        
+        /* Make sure rows are selectable */
+        .stDataFrame [data-testid='stDataFrameRow'] {
+            cursor: pointer;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
+for _, row in grouped_df.iterrows():
+    uid = row["Unique ID"]
+    client = row.get("Client", "Unknown")
+    transporter = row.get("Transporter", "Unknown")
+    trucks = row.get("Trucks", [])
+    date_submitted = row.get("Date Submitted")
+    truck_count = len(trucks)
+
+    # Determine Status
+    all_offloaded = all(truck.get("Date offloaded") for truck in trucks) if trucks else False
+    all_dispatched = all(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) if trucks else False
+    partial_dispatch = any(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) and not all_dispatched and not all_offloaded
+
+    # Status Icon and Label
+    if not trucks:
+        status_icon, label = "🔴", "No Truck Data"
+    elif all_offloaded:
+        status_icon, label = "🟢", "All Offloaded"
+    elif all_dispatched:
+        status_icon, label = "🟡", "Dispatched, Pending Offload"
+    elif partial_dispatch:
+        status_icon, label = "🟠", "Partially Dispatched"
+    else:
+        status_icon, label = "🔴", "Pending Dispatch"
+
+    submitted_str = date_submitted.strftime("%Y-%m-%d %H:%M") if pd.notna(date_submitted) else "N/A"
+    header = f"{status_icon} **{uid}** | 🏢 {client} | 🚚 {transporter} | 🛻 Trucks: {truck_count} | 🕒 {submitted_str} — *{label}*"
+
+    with st.expander(header):
         if not trucks:
-            status_icon, label = "🔴", "No Truck Data"
-        elif all_offloaded:
-            status_icon, label = "🟢", "All Offloaded"
-        elif all_dispatched:
-            status_icon, label = "🟡", "Dispatched, Pending Offload"
-        elif partial_dispatch:
-            status_icon, label = "🟠", "Partially Dispatched"
+            st.info("No truck data found.")
         else:
-            status_icon, label = "🔴", "Pending Dispatch"
+            # Create a copy of trucks to avoid modifying the original
+            trucks_data = [truck.copy() for truck in trucks]
+            
+            # Initialize IsCancelled if not exists
+            for truck in trucks_data:
+                if "IsCancelled" not in truck:
+                    truck["IsCancelled"] = False
+            
+            # Separate cancelled and active trucks
+            cancelled_trucks = [truck for truck in trucks_data if truck.get("IsCancelled")]
+            active_trucks = [truck for truck in trucks_data if not truck.get("IsCancelled")]
+            
+            # Combine with cancelled trucks at the bottom
+            sorted_trucks = active_trucks + cancelled_trucks
+            trucks_df = pd.DataFrame(sorted_trucks)
+            
+            # Format date/time columns
+            date_cols = [col for col in trucks_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
+            for col in date_cols:
+                if pd.api.types.is_datetime64_any_dtype(trucks_df[col]):
+                    trucks_df[col] = trucks_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                else:
+                    trucks_df[col] = trucks_df[col].astype(str).replace('nan', '')
+            
+            # Format numbers
+            num_cols = [col for col in trucks_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
+            for col in num_cols:
+                if pd.api.types.is_numeric_dtype(trucks_df[col]):
+                    trucks_df[col] = trucks_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                else:
+                    trucks_df[col] = trucks_df[col].astype(str).replace("nan", "")
+            
+            # Create a unique key for this widget
+            editor_key = f"truck_editor_{uid}"
+            
+            # Display the editable dataframe
+            edited_df = st.data_editor(
+                trucks_df,
+                use_container_width=True,
+                key=editor_key,
+                disabled=[col for col in trucks_df.columns if col != "Action"],
+                hide_index=True,
+                column_config={
+                    "Action": st.column_config.Column(
+                        "Action",
+                        width="small",
+                        disabled=False
+                    ),
+                    "IsCancelled": st.column_config.CheckboxColumn(
+                        "Cancel",
+                        help="Is this truck cancelled?",
+                        default=False,
+                    )
+                }
+            )
+            
+            # Apply row styling for cancelled trucks
+            st.markdown(
+                f"""
+                <script>
+                document.addEventListener('DOMContentLoaded', function() {{
+                    const table = document.querySelector('[data-testid="stDataFrame-container"]');
+                    if (table) {{
+                        const rows = table.querySelectorAll('[data-testid="stDataFrameRow"]');
+                        rows.forEach((row, index) => {{
+                            const isCancelled = {edited_df['IsCancelled'].tolist()}[index];
+                            if (isCancelled) {{
+                                row.classList.add('cancelled-row');
+                            }}
+                            // Make entire row clickable
+                            row.style.cursor = 'pointer';
+                            row.addEventListener('click', (e) => {{
+                                if (!e.target.closest('button')) {{
+                                    rows.forEach(r => r.classList.remove('row-selected'));
+                                    row.classList.add('row-selected');
+                                }}
+                            }});
+                        }});
+                    }}
+                }});
+                </script>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # Check for button clicks
+            if editor_key in st.session_state:
+                for idx, row in st.session_state[editor_key]['edited_rows'].items():
+                    if "Action" in row and row["Action"] == "🚫 Cancel":
+                        if idx < len(trucks_data):
+                            trucks_data[idx]["IsCancelled"] = True
+                            st.rerun()
+            
+            # --- Truck Status Summary ---
+            status_col = None
+            for candidate in ["Truck status", "Status", "Truck Status"]:
+                if candidate in trucks_df.columns:
+                    status_col = candidate
+                    break
 
-        submitted_str = date_submitted.strftime("%Y-%m-%d %H:%M") if pd.notna(date_submitted) else "N/A"
-        header = f"{status_icon} **{uid}** | 🏢 {client} | 🚚 {transporter} | 🛻 Trucks: {truck_count} | 🕒 {submitted_str} — *{label}*"
+            if status_col:
+                # Filter out cancelled trucks
+                non_cancelled_trucks = trucks_df[trucks_df["IsCancelled"] == False]
 
-        with st.expander(header):
-            if not trucks:
-                st.info("No truck data found.")
+                status_summary = non_cancelled_trucks[status_col].value_counts()
+                
+                if not status_summary.empty:
+                    st.markdown("### 📊 Truck Status Summary:")
+                    for label, count in status_summary.items():
+                        st.markdown(f"- **{count} truck(s)** — {label}")
             else:
-                trucks_df = pd.DataFrame(trucks)
-
-                # Format date/time columns
-                date_cols = [col for col in trucks_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
-                for col in date_cols:
-                    if pd.api.types.is_datetime64_any_dtype(trucks_df[col]):
-                        trucks_df[col] = trucks_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
-                    else:
-                        trucks_df[col] = trucks_df[col].astype(str).replace('nan', '')
-
-                # Format numbers
-                num_cols = [col for col in trucks_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
-                for col in num_cols:
-                    if pd.api.types.is_numeric_dtype(trucks_df[col]):
-                        trucks_df[col] = trucks_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
-                    else:
-                        trucks_df[col] = trucks_df[col].astype(str).replace("nan", "")
-
-                st.dataframe(trucks_df, use_container_width=True)
-
-                # Download Button
-                csv_data = trucks_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label=f"📄 Download Truck Data (CSV)",
-                    data=csv_data,
-                    file_name=f"{uid}_trucks.csv",
-                    mime="text/csv",
-                    key=f"dl_{uid}"
-                )
+                st.info("No status column found to summarize.")
+            
+            # Update button if any changes were made
+            # if any(truck.get("IsCancelled") for truck in trucks_data):
+            #     if st.button(f"💾 Save Changes for {uid}", key=f"save_{uid}"):
+            #         # Here you would update your database
+            #         # Example: update_shipment_in_db(uid, trucks_data)
+            #         st.success(f"Changes for shipment {uid} saved successfully!")
+            #         st.rerun()
+            
+            # Download Button
+            csv_data = edited_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label=f"📄 Download Truck Data (CSV)",
+                data=csv_data,
+                file_name=f"{uid}_trucks.csv",
+                mime="text/csv",
+                key=f"dl_{uid}"
+            )
