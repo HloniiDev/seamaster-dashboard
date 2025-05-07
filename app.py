@@ -278,7 +278,7 @@ if st.session_state.get("view") == "Generate ID":
 
     # --- Trailer Customization ---
     # TRAILERS
-    # trailers = []
+    trailers = []
     # for i in range(st.session_state.num_trailers):
     #     trailer_type = st.text_input(f"Trailer {i+1} Type", key=f"trailer_type_{i}")
     #     trailers.append(trailer_type.strip())
