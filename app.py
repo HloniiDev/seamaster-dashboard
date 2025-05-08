@@ -358,8 +358,12 @@ if st.session_state.get("view") == "Generate ID":
                 "Free Days at Offloading Point": free_days_offloading,
             }
 
+            # Add Borders and Trucks before saving to DB
+            shipment_data["Borders"] = borders
+            shipment_data["Trucks"] = trucks_array
+
             # Save the full shipment data to MongoDB
-            # shipments_collection.insert_one(shipment_data)
+            shipments_collection.insert_one(shipment_data)
 
             # --- Generate PDF (excluding Trucks and Trailers) ---
             pdf = FPDF()
@@ -374,10 +378,10 @@ if st.session_state.get("view") == "Generate ID":
             pdf.cell(90, 10, "Value", border=1, align='C')
             pdf.ln()
 
-            # Add shipment info to PDF table (excluding 'Trucks' and 'Trailers')
+            # Add shipment info to PDF table (excluding 'Trucks', 'Trailers', and 'Borders')
             pdf.set_font('Arial', '', 10)
             for key, value in shipment_data.items():
-                if key not in ['Trucks', 'Trucks Count', 'Trailers']:  # Exclude trucks and trailers
+                if key not in ['Trucks', 'Trucks Count', 'Trailers', 'Borders']:
                     pdf.cell(90, 10, key, border=1)
                     pdf.cell(90, 10, str(value), border=1)
                     pdf.ln()
@@ -396,6 +400,7 @@ if st.session_state.get("view") == "Generate ID":
                 )
 
             st.success("Shipment details saved and PDF generated successfully!")
+
 
 elif view == "All Past Shipment Metadata":
     st.markdown("## 📁 All Past Shipment IDs (Metadata View)")
