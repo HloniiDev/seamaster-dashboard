@@ -493,7 +493,7 @@ if view == "Dashboard":
     total_days_on_site = 0
     truck_count = 0
 
-    # Calculate the total trucks, charges, and days on site
+    # Calculate totals
     for _, row in df_filtered.iterrows():
         if "Trucks" in row and isinstance(row["Trucks"], list):
             total_trucks += len(row["Trucks"])
@@ -518,44 +518,6 @@ if view == "Dashboard":
     st.subheader("📋 Shipment Overview")
     grouped_df = df_filtered.sort_values("Date Submitted", ascending=False)
 
-
-    # CSS for styling
-    st.markdown("""
-    <style>
-        /* Highlight selected rows */
-        tr[data-testid='stDataFrameRowSelected'] {
-            background-color: #e6f3ff !important;
-        }
-        
-        /* Style for cancelled trucks */
-        tr.cancelled-row {
-            background-color: #f5f5f5 !important;
-            color: #999 !important;
-            text-decoration: line-through;
-        }
-        
-        /* Style for the Cancel Truck button */
-        button.cancel-btn {
-            background-color: #ff4b4b;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            padding: 2px 8px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        
-        button.cancel-btn:hover {
-            background-color: #ff2b2b;
-        }
-        
-        /* Make sure rows are selectable */
-        .stDataFrame [data-testid='stDataFrameRow'] {
-            cursor: pointer;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
     for _, row in grouped_df.iterrows():
         uid = row["Unique ID"]
         client = row.get("Client", "Unknown")
@@ -569,7 +531,6 @@ if view == "Dashboard":
         all_dispatched = all(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) if trucks else False
         partial_dispatch = any(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) and not all_dispatched and not all_offloaded
 
-        # Status Icon and Label
         if not trucks:
             status_icon, label = "🔴", "No Truck Data"
         elif all_offloaded:
@@ -588,127 +549,134 @@ if view == "Dashboard":
             if not trucks:
                 st.info("No truck data found.")
             else:
-                # Create a copy of trucks to avoid modifying the original
-                trucks_data = [truck.copy() for truck in trucks]
-                
-                # Initialize IsCancelled if not exists
-                for truck in trucks_data:
-                    if "IsCancelled" not in truck:
-                        truck["IsCancelled"] = False
-                
-                # Separate cancelled and active trucks
-                cancelled_trucks = [truck for truck in trucks_data if truck.get("IsCancelled")]
-                active_trucks = [truck for truck in trucks_data if not truck.get("IsCancelled")]
-                
-                # Combine with cancelled trucks at the bottom
-                sorted_trucks = active_trucks + cancelled_trucks
-                trucks_df = pd.DataFrame(sorted_trucks)
-                
-                # Format date/time columns
-                date_cols = [col for col in trucks_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
-                for col in date_cols:
-                    if pd.api.types.is_datetime64_any_dtype(trucks_df[col]):
-                        trucks_df[col] = trucks_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
-                    else:
-                        trucks_df[col] = trucks_df[col].astype(str).replace('nan', '')
-                
-                # Format numbers
-                num_cols = [col for col in trucks_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
-                for col in num_cols:
-                    if pd.api.types.is_numeric_dtype(trucks_df[col]):
-                        trucks_df[col] = trucks_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
-                    else:
-                        trucks_df[col] = trucks_df[col].astype(str).replace("nan", "")
-                
-                # Create a unique key for this widget
-                editor_key = f"truck_editor_{uid}"
-                
-                # Display the editable dataframe
-                edited_df = st.data_editor(
-                    trucks_df,
-                    use_container_width=True,
-                    key=editor_key,
-                    disabled=[col for col in trucks_df.columns if col != "Action"],
-                    hide_index=True,
-                    column_config={
-                        "Action": st.column_config.Column(
-                            "Action",
-                            width="small",
-                            disabled=False
-                        ),
-                        "IsCancelled": st.column_config.CheckboxColumn(
-                            "Cancel",
-                            help="Is this truck cancelled?",
-                            default=False,
-                        )
+                for truck in trucks:
+                    truck.setdefault("IsCancelled", False)
+
+                active_trucks = [t.copy() for t in trucks if not t.get("IsCancelled")]
+                cancelled_trucks = [t.copy() for t in trucks if t.get("IsCancelled")]
+                desired_columns = [
+                    "Truck Number", "Horse Number", "Trailer Number", "Driver Name", "Passport NO.", "Contact NO.",
+                    "Tonnage", "ETA", "Status", "Current Location", "Load Location", "Destination",
+                    "Arrived at Loading point", "Loaded Date", "Dispatch date",
+                    "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
+                ]
+
+
+                # --- ACTIVE TRUCKS ---
+                if active_trucks:
+                    st.markdown("### ✅ Active Trucks")
+
+                    # Ensure all desired columns exist, set missing to default ("" or False for boolean fields)
+                    cleaned_data = []
+                    for truck in active_trucks:
+                        row = {}
+                        for col in desired_columns:
+                            if col in ["Cancel", "Flag"]:
+                                row[col] = bool(truck.get(col, False))
+                            else:
+                                row[col] = truck.get(col, "")
+                        cleaned_data.append(row)
+
+                    active_df = pd.DataFrame(cleaned_data)
+
+                    # Format date/time columns
+                    date_cols = [col for col in active_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
+                    for col in date_cols:
+                        if pd.api.types.is_datetime64_any_dtype(active_df[col]):
+                            active_df[col] = active_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                        else:
+                            active_df[col] = pd.to_datetime(active_df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+
+                    # Format numeric columns
+                    num_cols = [col for col in active_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
+                    for col in num_cols:
+                        if pd.api.types.is_numeric_dtype(active_df[col]):
+                            active_df[col] = active_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        else:
+                            active_df[col] = pd.to_numeric(active_df[col], errors="coerce").apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+
+                    # Define column configurations for checkboxes (read-only)
+                    column_config = {
+                        "Cancel": st.column_config.CheckboxColumn("Cancel", disabled=True),
+                        "Flag": st.column_config.CheckboxColumn("Flag", disabled=True),
                     }
-                )
-                
-                # Apply row styling for cancelled trucks
-                st.markdown(
-                    f"""
-                    <script>
-                    document.addEventListener('DOMContentLoaded', function() {{
-                        const table = document.querySelector('[data-testid="stDataFrame-container"]');
-                        if (table) {{
-                            const rows = table.querySelectorAll('[data-testid="stDataFrameRow"]');
-                            rows.forEach((row, index) => {{
-                                const isCancelled = {edited_df['IsCancelled'].tolist()}[index];
-                                if (isCancelled) {{
-                                    row.classList.add('cancelled-row');
-                                }}
-                                // Make entire row clickable
-                                row.style.cursor = 'pointer';
-                                row.addEventListener('click', (e) => {{
-                                    if (!e.target.closest('button')) {{
-                                        rows.forEach(r => r.classList.remove('row-selected'));
-                                        row.classList.add('row-selected');
-                                    }}
-                                }});
-                            }});
-                        }}
-                    }});
-                    </script>
-                    """,
-                    unsafe_allow_html=True
-                )
-                
-                # Check for button clicks
-                if editor_key in st.session_state:
-                    for idx, row in st.session_state[editor_key]['edited_rows'].items():
-                        if "Action" in row and row["Action"] == "🚫 Cancel":
-                            if idx < len(trucks_data):
-                                trucks_data[idx]["IsCancelled"] = True
-                                st.rerun()
-                
-                # --- Truck Status Summary ---
-                status_col = None
-                for candidate in ["Truck status", "Status", "Truck Status"]:
-                    if candidate in trucks_df.columns:
-                        status_col = candidate
-                        break
 
-                if status_col:
-                    # Filter out cancelled trucks
-                    non_cancelled_trucks = trucks_df[trucks_df["IsCancelled"] == False]
-
-                    status_summary = non_cancelled_trucks[status_col].value_counts()
-                    
-                    if not status_summary.empty:
-                        st.markdown("### 📊 Truck Status Summary:")
-                        for label, count in status_summary.items():
-                            st.markdown(f"- **{count} truck(s)** — {label}")
+                    # Show editable table
+                    st.data_editor(
+                        active_df,
+                        use_container_width=True,
+                        key=f"active_editor_{uid}",
+                        hide_index=True,
+                        column_config=column_config
+                    )
                 else:
-                    st.info("No status column found to summarize.")
+                    st.info("No active trucks.")
 
-                # Download Button
-                csv_data = edited_df.to_csv(index=False).encode("utf-8")
+                # --- CANCELLED TRUCKS ---
+                if cancelled_trucks:
+                    st.markdown("### ❌ Cancelled Trucks")
+
+                    # Build DataFrame ensuring all desired columns exist
+                    cleaned_data = []
+                    for truck in cancelled_trucks:
+                        row = {col: truck.get(col, "") for col in desired_columns}
+                        cleaned_data.append(row)
+
+                    cancelled_df = pd.DataFrame(cleaned_data)
+
+                    # Format date/time columns
+                    date_cols = [col for col in cancelled_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
+                    for col in date_cols:
+                        if pd.api.types.is_datetime64_any_dtype(cancelled_df[col]):
+                            cancelled_df[col] = cancelled_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                        else:
+                            cancelled_df[col] = pd.to_datetime(cancelled_df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+
+                    # Format numeric columns
+                    num_cols = [col for col in cancelled_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
+                    for col in num_cols:
+                        if pd.api.types.is_numeric_dtype(cancelled_df[col]):
+                            cancelled_df[col] = cancelled_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        else:
+                            # Attempt to convert and format
+                            cancelled_df[col] = pd.to_numeric(cancelled_df[col], errors="coerce").apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+
+                    # Styling
+                    styled_df = cancelled_df.style.set_properties(**{
+                        'background-color': '#ffe6e6',
+                        'color': '#8a0000'
+                    })
+
+                    st.dataframe(styled_df, use_container_width=True)
+                else:
+                    st.info("No cancelled trucks.")
+
+                # --- Truck Status Summary ---
+                def render_truck_status_summary(df, title="📊 Truck Status Summary"):
+                    # Try to find the correct status column
+                    possible_status_cols = ["truck status", "status"]
+                    status_col = next((col for col in df.columns if col.strip().lower() in possible_status_cols), None)
+
+                    if status_col and not df.empty:
+                        status_summary = df[status_col].value_counts()
+                        if not status_summary.empty:
+                            st.markdown(f"### {title}:")
+                            for label, count in status_summary.items():
+                                st.markdown(f"- **{count} truck(s)** — {label}")
+                        else:
+                            st.info("No truck statuses to summarize.")
+                    else:
+                        st.info("No status column found to summarize.")
+
+                # Usage example after your dataframe is built
+                render_truck_status_summary(active_df)
+                # --- Download Button ---
+                full_df = pd.DataFrame(trucks)
+                csv_data = full_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    label=f"📄 Download Truck Data (CSV)",
+                    label="📄 Download Truck Data (CSV)",
                     data=csv_data,
                     file_name=f"{uid}_trucks.csv",
                     mime="text/csv",
                     key=f"dl_{uid}"
                 )
-    else:
-        pass 
