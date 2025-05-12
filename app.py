@@ -550,10 +550,10 @@ if view == "Dashboard":
                 st.info("No truck data found.")
             else:
                 for truck in trucks:
-                    truck.setdefault("IsCancelled", False)
+                    truck.setdefault("Cancel", False)
 
-                active_trucks = [t.copy() for t in trucks if not t.get("IsCancelled")]
-                cancelled_trucks = [t.copy() for t in trucks if t.get("IsCancelled")]
+                active_trucks = [t.copy() for t in trucks if not t.get("Cancel")]
+                cancelled_trucks = [t.copy() for t in trucks if t.get("Cancel")]
                 desired_columns = [
                     "Truck Number", "Horse Number", "Trailer Number", "Driver Name", "Passport NO.", "Contact NO.",
                     "Tonnage", "ETA", "Status", "Current Location", "Load Location", "Destination",
