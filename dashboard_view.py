@@ -126,12 +126,11 @@ def render_dashboard(df):
                 active_trucks = [t.copy() for t in trucks if not t.get("Cancel")]
                 cancelled_trucks = [t.copy() for t in trucks if t.get("Cancel")]
                 desired_columns = [
-                    "Truck Number", "Horse Number", "Trailer Number", "Driver Name", "Passport NO.", "Contact NO.",
-                    "Tonnage", "ETA", "Status", "Current Location", "Load Location", "Destination",
+                    "Truck Number", "Horse Number", "Trailers", "Driver Name", "Passport NO.", "Contact NO.",
+                    "Tonnage", "ETA", "Status", "Cargo Description","Current Location", "Load Location", "Destination",
                     "Arrived at Loading point", "Loaded Date", "Dispatch date",
                     "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
                 ]
-
 
                 # --- ACTIVE TRUCKS ---
                 if active_trucks:
