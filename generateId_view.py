@@ -102,7 +102,7 @@ def render_generateID(df):
                 truck_data = {
                     "Truck Number": i + 1,
                     "Truck": f"Truck-{i+1}",
-                    "Trailers": trailers,
+                    "Trailers": {trailer: None for trailer in trailers},
                     "Driver": "",
                     "Passport": "",
                     "Contact": "",
@@ -116,8 +116,8 @@ def render_generateID(df):
                     "Client": client_name,
                     "Transporter": transporter,
                     "Cargo Type": cargo,
-                    "Load Loading Point": loading_point,
-                    "Loading Point": loading_point,
+                    "Loading Capacity": loading_capacity,
+                    "Load Location": loading_point,
                     "Truck Count": truck_count,
                     "File Number": file_number,
                     "Date": datetime.combine(date_submitted_manual, datetime.min.time()),
@@ -133,10 +133,13 @@ def render_generateID(df):
                     "Comments": comments
                 }
 
+                borders_data = {}
                 for border in borders:
-                    truck_data[f"Actual arrival at {border}"] = None
-                    truck_data[f"Actual dispatch from {border}"] = None
+                    borders_data[f"Actual arrival at {border}"] = None
+                    borders_data[f"Actual dispatch from {border}"] = None
 
+                truck_data["Borders"] = borders_data
+                
                 trucks_array.append(truck_data)
 
             shipment_data = {
@@ -161,10 +164,17 @@ def render_generateID(df):
                 "Free Days at Loading Point": free_days_loading,
                 "Borders": borders,
                 "Trucks": trucks_array,
-                "Trailers": trailers,
+                "Trailers": {trailer: None for trailer in trailers},
             }
 
             # Save to MongoDB
+            borders_data = {}
+            for border in borders:
+                borders_data[f"Actual arrival at {border}"] = None
+                borders_data[f"Actual dispatch from {border}"] = None
+
+            shipment_data["Borders"] = borders_data
+            
             shipments_collection.insert_one(shipment_data)
 
             # Generate PDF (excluding Trucks and Borders)

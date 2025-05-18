@@ -125,24 +125,48 @@ def render_dashboard(df):
 
                 active_trucks = [t.copy() for t in trucks if not t.get("Cancel")]
                 cancelled_trucks = [t.copy() for t in trucks if t.get("Cancel")]
-                desired_columns = [
-                    "Truck Number", "Horse Number", "Trailers", "Driver Name", "Passport NO.", "Contact NO.",
-                    "Tonnage", "ETA", "Status", "Cargo Description","Current Location", "Load Location", "Destination",
-                    "Arrived at Loading point", "Loaded Date", "Dispatch date",
-                    "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
-                ]
+                
+# Helper to extract ordered keys from first valid truck object
+                def extract_ordered_keys(data_list, field):
+                    for item in data_list:
+                        if isinstance(item.get(field), dict):
+                            return list(item[field].keys())
+                    return []
 
-                # --- ACTIVE TRUCKS ---
+                # --- EXTRACT NESTED KEYS PRESERVING ORDER ---
+                border_keys = extract_ordered_keys(active_trucks, "Borders")
+                trailer_keys = extract_ordered_keys(active_trucks, "Trailers")
+
+                # --- BUILD DESIRED COLUMNS ---
+                desired_columns = [
+                    "Truck Number", "Horse Number"
+                ]
+                desired_columns.extend(trailer_keys)
+                desired_columns.extend([
+                    "Driver Name", "Passport NO.", "Contact NO.",
+                    "Tonnage", "ETA", "Status", "Cargo Description",
+                    "Current Location", "Load Location", "Destination",
+                    "Arrived at Loading point", "Loaded Date", "Dispatch date"
+                ])
+                desired_columns.extend(border_keys)
+                desired_columns.extend([
+                    "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
+                ])
+
+                # --- ACTIVE TRUCKS TABLE ---
                 if active_trucks:
                     st.markdown("### ✅ Active Trucks")
 
-                    # Ensure all desired columns exist, set missing to default ("" or False for boolean fields)
                     cleaned_data = []
                     for truck in active_trucks:
                         row = {}
                         for col in desired_columns:
                             if col in ["Cancel", "Flag"]:
                                 row[col] = bool(truck.get(col, False))
+                            elif col in trailer_keys:
+                                row[col] = truck.get("Trailers", {}).get(col, "")
+                            elif col in border_keys:
+                                row[col] = truck.get("Borders", {}).get(col, "")
                             else:
                                 row[col] = truck.get(col, "")
                         cleaned_data.append(row)
@@ -152,26 +176,31 @@ def render_dashboard(df):
                     # Format date/time columns
                     date_cols = [col for col in active_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
                     for col in date_cols:
-                        if pd.api.types.is_datetime64_any_dtype(active_df[col]):
-                            active_df[col] = active_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
-                        else:
-                            active_df[col] = pd.to_datetime(active_df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                        active_df[col] = (
+                            pd.to_datetime(active_df[col], errors="coerce")
+                            .dt.strftime("%Y-%m-%d %H:%M")
+                            .fillna("")
+                        )
 
                     # Format numeric columns
                     num_cols = [col for col in active_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
                     for col in num_cols:
-                        if pd.api.types.is_numeric_dtype(active_df[col]):
-                            active_df[col] = active_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
-                        else:
-                            active_df[col] = pd.to_numeric(active_df[col], errors="coerce").apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        active_df[col] = (
+                            pd.to_numeric(active_df[col], errors="coerce")
+                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        )
 
-                    # Define column configurations for checkboxes (read-only)
+                    # ❌ Make all columns non-editable
                     column_config = {
-                        "Cancel": st.column_config.CheckboxColumn("Cancel", disabled=True),
-                        "Flag": st.column_config.CheckboxColumn("Flag", disabled=True),
+                        col: st.column_config.TextColumn(col, disabled=True)
+                        for col in active_df.columns
                     }
 
-                    # Show editable table
+                    # You can override types if needed
+                    column_config["Cancel"] = st.column_config.CheckboxColumn("Cancel", disabled=True)
+                    column_config["Flag"] = st.column_config.CheckboxColumn("Flag", disabled=True)
+
+                    # Show read-only table
                     st.data_editor(
                         active_df,
                         use_container_width=True,
@@ -182,14 +211,44 @@ def render_dashboard(df):
                 else:
                     st.info("No active trucks.")
 
+
                 # --- CANCELLED TRUCKS ---
                 if cancelled_trucks:
                     st.markdown("### ❌ Cancelled Trucks")
 
-                    # Build DataFrame ensuring all desired columns exist
+                    # Extract ordered nested keys like we did before
+                    border_keys_cancelled = extract_ordered_keys(cancelled_trucks, "Borders")
+                    trailer_keys_cancelled = extract_ordered_keys(cancelled_trucks, "Trailers")
+
+                    # Rebuild desired_columns in correct order with nested keys
+                    desired_columns_cancelled = [
+                        "Truck Number", "Horse Number"
+                    ]
+                    desired_columns_cancelled.extend(trailer_keys_cancelled)
+                    desired_columns_cancelled.extend([
+                        "Driver Name", "Passport NO.", "Contact NO.",
+                        "Tonnage", "ETA", "Status", "Cargo Description",
+                        "Current Location", "Load Location", "Destination",
+                        "Arrived at Loading point", "Loaded Date", "Dispatch date"
+                    ])
+                    desired_columns_cancelled.extend(border_keys_cancelled)
+                    desired_columns_cancelled.extend([
+                        "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
+                    ])
+
+                    # Build cleaned truck data
                     cleaned_data = []
                     for truck in cancelled_trucks:
-                        row = {col: truck.get(col, "") for col in desired_columns}
+                        row = {}
+                        for col in desired_columns_cancelled:
+                            if col in ["Cancel", "Flag"]:
+                                row[col] = bool(truck.get(col, False))
+                            elif col in trailer_keys_cancelled:
+                                row[col] = truck.get("Trailers", {}).get(col, "")
+                            elif col in border_keys_cancelled:
+                                row[col] = truck.get("Borders", {}).get(col, "")
+                            else:
+                                row[col] = truck.get(col, "")
                         cleaned_data.append(row)
 
                     cancelled_df = pd.DataFrame(cleaned_data)
@@ -197,27 +256,39 @@ def render_dashboard(df):
                     # Format date/time columns
                     date_cols = [col for col in cancelled_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
                     for col in date_cols:
-                        if pd.api.types.is_datetime64_any_dtype(cancelled_df[col]):
-                            cancelled_df[col] = cancelled_df[col].dt.strftime("%Y-%m-%d %H:%M").fillna("")
-                        else:
-                            cancelled_df[col] = pd.to_datetime(cancelled_df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M").fillna("")
+                        cancelled_df[col] = (
+                            pd.to_datetime(cancelled_df[col], errors="coerce")
+                            .dt.strftime("%Y-%m-%d %H:%M")
+                            .fillna("")
+                        )
 
                     # Format numeric columns
                     num_cols = [col for col in cancelled_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
                     for col in num_cols:
-                        if pd.api.types.is_numeric_dtype(cancelled_df[col]):
-                            cancelled_df[col] = cancelled_df[col].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
-                        else:
-                            # Attempt to convert and format
-                            cancelled_df[col] = pd.to_numeric(cancelled_df[col], errors="coerce").apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        cancelled_df[col] = (
+                            pd.to_numeric(cancelled_df[col], errors="coerce")
+                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                        )
 
-                    # Styling
-                    styled_df = cancelled_df.style.set_properties(**{
-                        'background-color': '#ffe6e6',
-                        'color': '#8a0000'
-                    })
+                    # Disable editing for all columns
+                    column_config = {
+                        col: st.column_config.TextColumn(col, disabled=True)
+                        for col in cancelled_df.columns
+                    }
+                    column_config["Cancel"] = st.column_config.CheckboxColumn("Cancel", disabled=True)
+                    column_config["Flag"] = st.column_config.CheckboxColumn("Flag", disabled=True)
 
-                    st.dataframe(styled_df, use_container_width=True)
+                    # Show as read-only data editor with red highlight (using background)
+                    st.data_editor(
+                        cancelled_df,
+                        use_container_width=True,
+                        key=f"cancelled_editor_{uid}",
+                        hide_index=True,
+                        column_config=column_config,
+                        disabled=True,  # full table disabled just in case
+                        height=min(len(cancelled_df) * 35 + 50, 700),
+                        column_order=cancelled_df.columns.tolist()
+                    )
                 else:
                     st.info("No cancelled trucks.")
 
