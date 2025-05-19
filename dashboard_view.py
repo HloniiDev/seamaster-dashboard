@@ -64,6 +64,7 @@ def render_dashboard(df):
     total_days_on_site = 0
     truck_count = 0
 
+
     # Calculate totals
     for _, row in df_filtered.iterrows():
         if "Trucks" in row and isinstance(row["Trucks"], list):
