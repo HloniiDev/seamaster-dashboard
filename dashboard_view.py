@@ -1,8 +1,6 @@
-# dashboard_view.py
-
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def render_dashboard(df):
     st.markdown("## 📊 Shipment Dashboard")
@@ -14,19 +12,31 @@ def render_dashboard(df):
         st.header("🔍 Filter Shipments")
         st.markdown("---")
 
-        # Date Filter
+        # Ensure "Date Submitted" is datetime for proper min/max BEFORE filtering
+        if "Date Submitted" in df_filtered.columns:
+            df_filtered["Date Submitted"] = pd.to_datetime(df_filtered["Date Submitted"], errors='coerce')
+            # Drop rows where Date Submitted could not be parsed
+            df_filtered = df_filtered.dropna(subset=["Date Submitted"])
+
         if "Date Submitted" in df_filtered.columns and not df_filtered["Date Submitted"].empty:
-            min_date = df_filtered["Date Submitted"].min().date()
-            max_date = df_filtered["Date Submitted"].max().date()
-            default_range = [min_date, max_date]
+            min_date_available = df_filtered["Date Submitted"].min().date()
+            max_date_available = df_filtered["Date Submitted"].max().date()
+
+            if pd.isna(min_date_available):
+                min_date_available = datetime.now().date()
+            if pd.isna(max_date_available):
+                max_date_available = datetime.now().date()
+
+            default_range = [min_date_available, max_date_available]
+
             date_range = st.date_input(
                 "📅 Submission Date Range",
                 value=default_range,
-                min_value=min_date,
-                max_value=max_date,
+                min_value=min_date_available,
+                max_value=max_date_available,
                 key="filter_date_range"
             )
-            if isinstance(date_range, list) and len(date_range) == 2:
+            if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
                 start, end = date_range
                 start_dt = datetime.combine(start, datetime.min.time())
                 end_dt = datetime.combine(end, datetime.max.time())
@@ -35,7 +45,7 @@ def render_dashboard(df):
                     (df_filtered["Date Submitted"] <= end_dt)
                 ]
         else:
-            st.info("No submission dates available.")
+            st.info("No submission dates available after parsing.")
 
         st.markdown("---")
 
@@ -54,41 +64,133 @@ def render_dashboard(df):
         col1, col2, col3, col4 = st.columns(4)
         with col1: st.metric("📦 Shipments", 0)
         with col2: st.metric("🚛 Trucks", 0)
-        with col3: st.metric("💸 Standing Charges", "R 0.00")
+        with col3: st.metric("💸 Total Demurrage Costs", "R 0.00")
         with col4: st.metric("⏳ Avg Days on Site", "0.0")
         st.stop()
 
     total_shipments = df_filtered["Unique ID"].nunique() if "Unique ID" in df_filtered.columns else 0
     total_trucks = 0
-    total_standing_charges = 0
+    total_demurrage_costs_sum = 0
     total_days_on_site = 0
-    truck_count = 0
+    truck_count_for_avg_days = 0
 
 
-    # Calculate totals
-    for _, row in df_filtered.iterrows():
-        if "Trucks" in row and isinstance(row["Trucks"], list):
-            total_trucks += len(row["Trucks"])
-            for truck in row["Trucks"]:
-                if isinstance(truck, dict):
-                    if "Standing time charges" in truck and pd.notna(truck["Standing time charges"]):
-                        total_standing_charges += truck["Standing time charges"]
-                    if "Days on site" in truck and pd.notna(truck["Days on site"]):
-                        total_days_on_site += truck["Days on site"]
-                        truck_count += 1
+    # --- Process each truck for calculations before displaying metrics and tables ---
+    processed_shipments_with_demurrage = []
+    
+    for idx, row in df_filtered.iterrows():
+        shipment_copy = row.to_dict()
+        trucks_with_demurrage = []
+        
+        shipment_demurrage_rate = float(shipment_copy.get("Demurrage Rate", 0.0) or 0.0)
 
-    avg_days = total_days_on_site / truck_count if truck_count else 0
+        if "Trucks" in shipment_copy and isinstance(shipment_copy["Trucks"], list):
+            for truck in shipment_copy["Trucks"]:
+                truck_copy = truck.copy()
+                
+                demurrage_rate_truck = float(truck_copy.get("Demurrage Rate", shipment_demurrage_rate) or 0.0)
+                truck_number = truck_copy.get('Truck Number', 'N/A')
 
-    # --- Display Key Metrics ---
+                # --- Calculate Billable days at Loading Point & Demurrage cost at Loading Point ---
+                loaded_date_str = truck_copy.get("Loaded Date")
+                dispatch_date_lp_str = truck_copy.get("Dispatch date")
+                free_days_lp = int(truck_copy.get("Free Days at Loading Point", 0) or 0) # Get free days, default to 0
+
+                loaded_dt_lp = pd.to_datetime(loaded_date_str, errors='coerce')
+                dispatch_dt_lp = pd.to_datetime(dispatch_date_lp_str, errors='coerce')
+
+                billable_days_lp = 0
+                demurrage_cost_lp = 0.0
+
+                if pd.notna(loaded_dt_lp):
+                    end_date_lp_calc = dispatch_dt_lp if pd.notna(dispatch_dt_lp) else pd.Timestamp(datetime.now())
+                    days_at_loading = (end_date_lp_calc.floor('D') - loaded_dt_lp.floor('D')).days
+                    
+                    billable_days_lp = max(0, days_at_loading - free_days_lp) # Subtract free days
+                    demurrage_cost_lp = billable_days_lp * demurrage_rate_truck
+
+                truck_copy["Billable days at Loading Point"] = billable_days_lp
+                truck_copy["Demurrage cost at Loading Point"] = demurrage_cost_lp
+
+
+                # --- Calculate Billable days at Border & Demurrage cost at Border ---
+                billable_days_border = 0
+                demurrage_cost_border = 0.0
+                free_days_border = int(truck_copy.get("Free Days at Border", 0) or 0) # Get free days for border
+
+                total_days_at_all_borders_raw = 0 # This will accumulate the gross days spent at all borders
+
+                if "Borders" in truck_copy and isinstance(truck_copy["Borders"], dict):
+                    border_data = truck_copy["Borders"]
+                    
+                    # Identify unique border names (e.g., "Testing 1", "Testing 2")
+                    border_names = set()
+                    for key in border_data.keys():
+                        if "actual arrival at" in key.lower():
+                            # Extract name after "Actual arrival at "
+                            name_part = key.replace("Actual arrival at ", "").strip()
+                            border_names.add(name_part)
+                    
+                    sorted_border_names = sorted(list(border_names))
+
+                    for border_name in sorted_border_names:
+                        arrival_key = f"Actual arrival at {border_name}"
+                        dispatch_key = f"Actual dispatch from {border_name}"
+
+                        border_arrival_dt = pd.to_datetime(border_data.get(arrival_key), errors='coerce')
+                        border_dispatch_dt = pd.to_datetime(border_data.get(dispatch_key), errors='coerce')
+                        
+                        if pd.notna(border_arrival_dt):
+                            end_date_border_calc = border_dispatch_dt if pd.notna(border_dispatch_dt) else pd.Timestamp(datetime.now())
+                            
+                            # Calculate days for THIS specific border segment (raw duration)
+                            days_at_this_border = (end_date_border_calc.floor('D') - border_arrival_dt.floor('D')).days
+                            
+                            # Accumulate raw days at each border segment
+                            total_days_at_all_borders_raw += max(0, days_at_this_border)
+
+                # --- This is where Free Days at Border are subtracted and Billable days are set ---
+                # billable_days_border is the final number of days for which demurrage applies
+                billable_days_border = max(0, total_days_at_all_borders_raw - free_days_border)
+                
+                # --- This is where Demurrage cost is calculated using the Billable days ---
+                demurrage_cost_border = billable_days_border * demurrage_rate_truck
+                
+                truck_copy["Total Days at All Borders (Before Free Days)"] = total_days_at_all_borders_raw 
+                truck_copy["Free Days at Border Used"] = free_days_border # Display the free days value
+                truck_copy["Billable days at Border"] = billable_days_border
+                truck_copy["Demurrage cost at Border"] = demurrage_cost_border
+
+                trucks_with_demurrage.append(truck_copy)
+                total_demurrage_costs_sum += demurrage_cost_lp + demurrage_cost_border
+
+                if "Days on site" in truck_copy and pd.notna(truck_copy["Days on site"]):
+                    total_days_on_site += truck_copy["Days on site"]
+                    truck_count_for_avg_days += 1
+
+        total_trucks += len(trucks_with_demurrage)
+        shipment_copy["Trucks"] = trucks_with_demurrage
+        processed_shipments_with_demurrage.append(shipment_copy)
+
+    avg_days = total_days_on_site / truck_count_for_avg_days if truck_count_for_avg_days else 0
+
+    # --- Display Key Metrics (updated with calculated demurrage sum) ---
     col1, col2, col3, col4 = st.columns(4)
     with col1: st.metric("📦 Total Shipments", total_shipments)
     with col2: st.metric("🚛 Total Trucks", total_trucks)
-    with col3: st.metric("💰 Standing Charges", f"R {total_standing_charges:,.2f}")
-    with col4: st.metric("⏱ Avg Days on Site", f"{avg_days:.1f}" if truck_count else "N/A")
+    with col3: st.metric("💰 Total Demurrage Costs", f"R {total_demurrage_costs_sum:,.2f}")
+    with col4: st.metric("⏱ Avg Days on Site", f"{avg_days:.1f}" if truck_count_for_avg_days else "N/A")
+
 
     # --- Shipment Overview ---
     st.subheader("📋 Shipment Overview")
-    grouped_df = df_filtered.sort_values("Date Submitted", ascending=False)
+    grouped_df = pd.DataFrame(processed_shipments_with_demurrage)
+    if "Date Submitted" in grouped_df.columns:
+        grouped_df["Date Submitted"] = pd.to_datetime(grouped_df["Date Submitted"], errors='coerce')
+        grouped_df = grouped_df.sort_values("Date Submitted", ascending=False)
+    else:
+        st.warning("'Date Submitted' column missing or invalid for sorting in grouped_df.")
+
 
     for _, row in grouped_df.iterrows():
         uid = row["Unique ID"]
@@ -98,10 +200,9 @@ def render_dashboard(df):
         date_submitted = row.get("Date Submitted")
         truck_count = len(trucks)
 
-        # Determine Status
         all_offloaded = all(truck.get("Date offloaded") for truck in trucks) if trucks else False
-        all_dispatched = all(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) if trucks else False
-        partial_dispatch = any(any("dispatch from" in k.lower() and pd.notna(truck.get(k)) for k in truck) for truck in trucks) and not all_dispatched and not all_offloaded
+        all_dispatched = all(any("dispatch from" in k.lower() and pd.notna(truck.get("Borders", {}).get(k)) for k in truck.get("Borders", {})) for truck in trucks) if trucks else False
+        partial_dispatch = any(any("dispatch from" in k.lower() and pd.notna(truck.get("Borders", {}).get(k)) for k in truck.get("Borders", {})) for truck in trucks) and not all_dispatched and not all_offloaded
 
         if not trucks:
             status_icon, label = "🔴", "No Truck Data"
@@ -121,24 +222,19 @@ def render_dashboard(df):
             if not trucks:
                 st.info("No truck data found.")
             else:
-                for truck in trucks:
-                    truck.setdefault("Cancel", False)
-
                 active_trucks = [t.copy() for t in trucks if not t.get("Cancel")]
                 cancelled_trucks = [t.copy() for t in trucks if t.get("Cancel")]
                 
-# Helper to extract ordered keys from first valid truck object
                 def extract_ordered_keys(data_list, field):
                     for item in data_list:
                         if isinstance(item.get(field), dict):
-                            return list(item[field].keys())
+                            border_dict_keys = list(item[field].keys())
+                            return sorted(border_dict_keys) 
                     return []
 
-                # --- EXTRACT NESTED KEYS PRESERVING ORDER ---
                 border_keys = extract_ordered_keys(active_trucks, "Borders")
                 trailer_keys = extract_ordered_keys(active_trucks, "Trailers")
 
-                # --- BUILD DESIRED COLUMNS ---
                 desired_columns = [
                     "Truck Number", "Horse Number"
                 ]
@@ -147,34 +243,39 @@ def render_dashboard(df):
                     "Driver Name", "Passport NO.", "Contact NO.",
                     "Tonnage", "ETA", "Status", "Cargo Description",
                     "Current Location", "Load Location", "Destination",
-                    "Arrived at Loading point", "Loaded Date", "Dispatch date"
+                    "Arrived at Loading point", "Loaded Date", "Dispatch date",
+                    "Free Days at Loading Point",
+                    "Billable days at Loading Point", "Demurrage cost at Loading Point"
                 ])
-                desired_columns.extend(border_keys)
+                desired_columns.extend(border_keys) 
                 desired_columns.extend([
+                    "Free Days at Border", # Display the input free days
+                    "Total Days at All Borders (Before Free Days)", # Optional: for debugging/visibility
+                    "Billable days at Border", "Demurrage cost at Border",
                     "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
                 ])
+                desired_columns = list(dict.fromkeys(desired_columns))
 
-                # --- ACTIVE TRUCKS TABLE ---
+
                 if active_trucks:
                     st.markdown("### ✅ Active Trucks")
 
                     cleaned_data = []
-                    for truck in active_trucks:
+                    for truck_data in active_trucks:
                         row = {}
                         for col in desired_columns:
                             if col in ["Cancel", "Flag"]:
-                                row[col] = bool(truck.get(col, False))
+                                row[col] = bool(truck_data.get(col, False))
                             elif col in trailer_keys:
-                                row[col] = truck.get("Trailers", {}).get(col, "")
+                                row[col] = truck_data.get("Trailers", {}).get(col, "")
                             elif col in border_keys:
-                                row[col] = truck.get("Borders", {}).get(col, "")
+                                row[col] = truck_data.get("Borders", {}).get(col, "")
                             else:
-                                row[col] = truck.get(col, "")
+                                row[col] = truck_data.get(col, "")
                         cleaned_data.append(row)
 
                     active_df = pd.DataFrame(cleaned_data)
 
-                    # Format date/time columns
                     date_cols = [col for col in active_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
                     for col in date_cols:
                         active_df[col] = (
@@ -183,25 +284,21 @@ def render_dashboard(df):
                             .fillna("")
                         )
 
-                    # Format numeric columns
-                    num_cols = [col for col in active_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
+                    num_cols = [col for col in active_df.columns if any(x in col.lower() for x in ["ton", "days", "cost", "rate", "weight"])]
                     for col in num_cols:
                         active_df[col] = (
                             pd.to_numeric(active_df[col], errors="coerce")
-                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else ("" if "cost" in col.lower() else ""))
                         )
 
-                    # ❌ Make all columns non-editable
                     column_config = {
                         col: st.column_config.TextColumn(col, disabled=True)
                         for col in active_df.columns
                     }
 
-                    # You can override types if needed
                     column_config["Cancel"] = st.column_config.CheckboxColumn("Cancel", disabled=True)
                     column_config["Flag"] = st.column_config.CheckboxColumn("Flag", disabled=True)
 
-                    # Show read-only table
                     st.data_editor(
                         active_df,
                         use_container_width=True,
@@ -213,15 +310,12 @@ def render_dashboard(df):
                     st.info("No active trucks.")
 
 
-                # --- CANCELLED TRUCKS ---
                 if cancelled_trucks:
                     st.markdown("### ❌ Cancelled Trucks")
 
-                    # Extract ordered nested keys like we did before
                     border_keys_cancelled = extract_ordered_keys(cancelled_trucks, "Borders")
                     trailer_keys_cancelled = extract_ordered_keys(cancelled_trucks, "Trailers")
 
-                    # Rebuild desired_columns in correct order with nested keys
                     desired_columns_cancelled = [
                         "Truck Number", "Horse Number"
                     ]
@@ -230,31 +324,36 @@ def render_dashboard(df):
                         "Driver Name", "Passport NO.", "Contact NO.",
                         "Tonnage", "ETA", "Status", "Cargo Description",
                         "Current Location", "Load Location", "Destination",
-                        "Arrived at Loading point", "Loaded Date", "Dispatch date"
+                        "Arrived at Loading point", "Loaded Date", "Dispatch date",
+                        "Free Days at Loading Point",
+                        "Billable days at Loading Point", "Demurrage cost at Loading Point"
                     ])
                     desired_columns_cancelled.extend(border_keys_cancelled)
                     desired_columns_cancelled.extend([
+                        "Free Days at Border", # Display the input free days
+                        "Total Days at All Borders (Before Free Days)", # Optional: for debugging/visibility
+                        "Billable days at Border", "Demurrage cost at Border",
                         "Date Arrived", "Date offloaded", "Cancel", "Flag", "Comment"
                     ])
+                    desired_columns_cancelled = list(dict.fromkeys(desired_columns_cancelled))
 
-                    # Build cleaned truck data
+
                     cleaned_data = []
-                    for truck in cancelled_trucks:
+                    for truck_data in cancelled_trucks:
                         row = {}
                         for col in desired_columns_cancelled:
                             if col in ["Cancel", "Flag"]:
-                                row[col] = bool(truck.get(col, False))
+                                row[col] = bool(truck_data.get(col, False))
                             elif col in trailer_keys_cancelled:
-                                row[col] = truck.get("Trailers", {}).get(col, "")
+                                row[col] = truck_data.get("Trailers", {}).get(col, "")
                             elif col in border_keys_cancelled:
-                                row[col] = truck.get("Borders", {}).get(col, "")
+                                row[col] = truck_data.get("Borders", {}).get(col, "")
                             else:
-                                row[col] = truck.get(col, "")
+                                row[col] = truck_data.get(col, "")
                         cleaned_data.append(row)
 
                     cancelled_df = pd.DataFrame(cleaned_data)
 
-                    # Format date/time columns
                     date_cols = [col for col in cancelled_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
                     for col in date_cols:
                         cancelled_df[col] = (
@@ -263,15 +362,13 @@ def render_dashboard(df):
                             .fillna("")
                         )
 
-                    # Format numeric columns
-                    num_cols = [col for col in cancelled_df.columns if any(x in col.lower() for x in ["ton", "days", "charges", "weight"])]
+                    num_cols = [col for col in cancelled_df.columns if any(x in col.lower() for x in ["ton", "days", "cost", "rate", "weight"])]
                     for col in num_cols:
                         cancelled_df[col] = (
                             pd.to_numeric(cancelled_df[col], errors="coerce")
-                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "")
+                            .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else ("" if "cost" in col.lower() else ""))
                         )
 
-                    # Disable editing for all columns
                     column_config = {
                         col: st.column_config.TextColumn(col, disabled=True)
                         for col in cancelled_df.columns
@@ -279,28 +376,25 @@ def render_dashboard(df):
                     column_config["Cancel"] = st.column_config.CheckboxColumn("Cancel", disabled=True)
                     column_config["Flag"] = st.column_config.CheckboxColumn("Flag", disabled=True)
 
-                    # Show as read-only data editor with red highlight (using background)
                     st.data_editor(
                         cancelled_df,
                         use_container_width=True,
                         key=f"cancelled_editor_{uid}",
                         hide_index=True,
                         column_config=column_config,
-                        disabled=True,  # full table disabled just in case
+                        disabled=True,
                         height=min(len(cancelled_df) * 35 + 50, 700),
                         column_order=cancelled_df.columns.tolist()
                     )
                 else:
                     st.info("No cancelled trucks.")
 
-                # --- Truck Status Summary ---
-                def render_truck_status_summary(df, title="📊 Truck Status Summary"):
-                    # Try to find the correct status column
+                def render_truck_status_summary(df_summary, title="📊 Truck Status Summary"):
                     possible_status_cols = ["truck status", "status"]
-                    status_col = next((col for col in df.columns if col.strip().lower() in possible_status_cols), None)
+                    status_col = next((col for col in df_summary.columns if col.strip().lower() in possible_status_cols), None)
 
-                    if status_col and not df.empty:
-                        status_summary = df[status_col].value_counts()
+                    if status_col and not df_summary.empty:
+                        status_summary = df_summary[status_col].value_counts()
                         if not status_summary.empty:
                             st.markdown(f"### {title}:")
                             for label, count in status_summary.items():
@@ -310,11 +404,13 @@ def render_dashboard(df):
                     else:
                         st.info("No status column found to summarize.")
 
-                # Usage example after your dataframe is built
-                render_truck_status_summary(active_df)
-                # --- Download Button ---
-                full_df = pd.DataFrame(trucks)
-                csv_data = full_df.to_csv(index=False).encode("utf-8")
+                if not active_df.empty:
+                    render_truck_status_summary(active_df)
+                else:
+                    st.info("No active trucks for status summary.")
+
+                download_df = pd.DataFrame(trucks)
+                csv_data = download_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     label="📄 Download Truck Data (CSV)",
                     data=csv_data,

@@ -6,6 +6,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from datetime import datetime
 
+# Assuming mongo_uri, client, db, shipments_collection are defined globally or passed in
 mongo_uri = st.secrets["mongo_uri"]
 client = MongoClient(mongo_uri)
 db = client["seamaster"]
@@ -54,6 +55,9 @@ def render_generateID(df):
         truck_type = st.text_input("Truck Type", max_chars=50)
         free_days_border = st.number_input("Free Days at Border", min_value=0, value=0, step=1)
         free_days_loading = st.number_input("Free Days at Loading Point", min_value=0, value=0, step=1)
+        # New input field for Demurrage Rate
+        demurrage_rate = st.number_input("Demurrage Rate", min_value=0.0, step=0.01, format="%.2f")
+
 
     st.subheader("Additional Truck Details")
     col7, col8 = st.columns(2)
@@ -107,12 +111,13 @@ def render_generateID(df):
                     "Passport": "",
                     "Contact": "",
                     "Driver contact number": "",
-                    "Status": "Waiting to load",
+                    "Status": "Booked",
                     "Current location": loading_point,
                     "Destination": loading_point,
                     "Rate per Ton": rate_per_ton,
                     "Free Days at Border": free_days_border,
                     "Free Days at Loading Point": free_days_loading,
+                    "Demurrage Rate": demurrage_rate,  # Added to each truck
                     "Client": client_name,
                     "Transporter": transporter,
                     "Cargo Type": cargo,
@@ -162,6 +167,7 @@ def render_generateID(df):
                 "Truck Type": truck_type,
                 "Free Days at Border": free_days_border,
                 "Free Days at Loading Point": free_days_loading,
+                "Demurrage Rate": demurrage_rate, # Added to the main shipment data
                 "Borders": borders,
                 "Trucks": trucks_array,
                 "Trailers": {trailer: None for trailer in trailers},
