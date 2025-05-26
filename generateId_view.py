@@ -20,57 +20,81 @@ except ConnectionFailure as e:
 
 # --- Generate PDF with a Styled Table in the Template ---
 def generate_pdf_with_template(template_path, shipment_data, unique_id):
-    doc = fitz.open(template_path)
+    """
+    Generates a PDF based on a template, populating a styled table with shipment data.
+    Adjusts text placement within columns for better readability.
+    """
+    try:
+        doc = fitz.open(template_path)
+    except fitz.FileNotFoundError:
+        st.error(f"PDF template file not found at: {template_path}")
+        return None # Return None if template is not found
+
     page = doc[0]
 
-    # Table layout
-    x0, y0 = 50, 180
+    # Table layout dimensions
+    x0, y0 = 50, 180  # Starting coordinates for the table
     col1_width = 150
     col2_width = 300
-    row_height = 18
-    font_size = 9
+    row_height = 20
+    font_size = 10
+    text_padding_left = 5 # NEW: Padding for text inside cells
 
-    # Exclude unwanted fields
+    # Fields to exclude from the PDF table
     exclude_fields = [
         'Trucks', 'Borders', 'Unique ID', 'Trailers', '_id',
         'Agent Details (Country 1)', 'Agent Details (Country 2)', 'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate',
+        'Escorts arranged', 'Loading Capacity', 'Comments'
     ]
+
+    # Filter data: exclude unwanted fields and non-scalar types (lists/dicts)
     filtered_data = {
         k: v for k, v in shipment_data.items()
         if k not in exclude_fields and not isinstance(v, (list, dict))
     }
 
-    # Header row
+    # Draw Header row for the table
     header_rect = fitz.Rect(x0, y0, x0 + col1_width + col2_width, y0 + row_height)
-    page.draw_rect(header_rect, color=(0, 0, 0), fill=(0.9, 0.9, 0.9))
-    page.insert_textbox(header_rect, "Shipment Details", fontsize=10, fontname="helv", align=1)
+    page.draw_rect(header_rect, color=(0, 0, 0), fill=(0.9, 0.9, 0.9)) # Black border, light gray fill
+    page.insert_textbox(header_rect, "Shipment Details", fontsize=10, fontname="helv", align=fitz.TEXT_ALIGN_CENTER) # Align text to center
     y0 += row_height
 
-    # Draw each row with alternating colors and cell borders
+    # Draw each data row with alternating colors and cell borders
     for idx, (key, value) in enumerate(filtered_data.items()):
-        value = value.strftime("%Y-%m-%d") if isinstance(value, datetime) else str(value)
+        # Format datetime objects to string
+        value_str = value.strftime("%Y-%m-%d") if isinstance(value, datetime) else str(value)
 
+        # Define rectangles for key and value cells
+        # Adjusted x0 for textboxes to include padding
         key_rect = fitz.Rect(x0, y0, x0 + col1_width, y0 + row_height)
         value_rect = fitz.Rect(x0 + col1_width, y0, x0 + col1_width + col2_width, y0 + row_height)
 
-        # Alternating row color
-        fill_color = (0.96, 0.96, 0.96) if idx % 2 == 0 else (1, 1, 1)
+        # Alternating row background color
+        fill_color = (0.96, 0.96, 0.96) if idx % 2 == 0 else (1, 1, 1) # Light gray or white
 
         # Draw key cell
-        page.draw_rect(key_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5)
-        page.insert_textbox(key_rect, key, fontsize=font_size, fontname="helv", align=0)
+        page.draw_rect(key_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5) # Gray border, fill color
+        # NEW: Adjust the textbox rectangle for padding
+        page.insert_textbox(
+            fitz.Rect(key_rect.x0 + text_padding_left, key_rect.y0, key_rect.x1, key_rect.y1),
+            key, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT
+        )
 
         # Draw value cell
-        page.draw_rect(value_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5)
-        page.insert_textbox(value_rect, value, fontsize=font_size, fontname="helv", align=0)
+        page.draw_rect(value_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5) # Gray border, fill color
+        # NEW: Adjust the textbox rectangle for padding
+        page.insert_textbox(
+            fitz.Rect(value_rect.x0 + text_padding_left, value_rect.y0, value_rect.x1, value_rect.y1),
+            value_str, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT
+        )
 
-        y0 += row_height
+        y0 += row_height # Move down for the next row
 
-    # Save output
+    # Save the modified PDF to a BytesIO object
     output_stream = BytesIO()
     doc.save(output_stream)
     doc.close()
-    output_stream.seek(0)
+    output_stream.seek(0) # Reset stream position to the beginning
     return output_stream
 
 
@@ -189,11 +213,11 @@ def render_generateID(df):
             shipment_data = {
                 "Unique ID": unique_id,
                 "Date Submitted": datetime.combine(date_submitted_manual, datetime.min.time()),
-                "Transporter": transporter, "Transporter Details": transporter_details, "Client": client_name, "Cargo Type": cargo,
+                "Transporter": transporter, "Transporter Details": transporter_details,"Transporter Contact Details": transporter_contact, "Client": client_name, "Cargo Type": cargo,
                 "Loading Point": loading_point, "Offloading Point": offloading_point,
                 "Tonnage": tonnage,
                 "File Number": file_number, "Issued By": issued_by,
-                "Truck Count": truck_count, "Transporter Contact Details": transporter_contact,
+                "Truck Count": truck_count, 
                 "Agent Details (Country 1)": agent_details_country1,
                 "Agent Details (Country 2)": agent_details_country2,
                 "Payment Terms": payment_terms,

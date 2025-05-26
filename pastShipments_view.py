@@ -5,10 +5,11 @@ import io
 import fitz  # PyMuPDF
 from io import BytesIO
 
-# --- Generate PDF with a Styled Table in the Template (COPIED FROM YOUR FIRST FILE) ---
+# --- Generate PDF with a Styled Table in the Template ---
 def generate_pdf_with_template(template_path, shipment_data, unique_id):
     """
     Generates a PDF based on a template, populating a styled table with shipment data.
+    Adjusts text placement within columns for better readability.
     """
     try:
         doc = fitz.open(template_path)
@@ -22,14 +23,15 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     x0, y0 = 50, 180  # Starting coordinates for the table
     col1_width = 150
     col2_width = 300
-    row_height = 18
-    font_size = 9
+    row_height = 20
+    font_size = 10
+    text_padding_left = 5 # NEW: Padding for text inside cells
 
-    # Fields to exclude from the PDF table (UPDATED EXCLUSION LIST)
+    # Fields to exclude from the PDF table
     exclude_fields = [
         'Trucks', 'Borders', 'Unique ID', 'Trailers', '_id',
         'Agent Details (Country 1)', 'Agent Details (Country 2)', 'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate',
-        'Escorts arranged', 'Loading Capacity', 'Comments' # These are now excluded
+        'Escorts arranged', 'Loading Capacity', 'Comments'
     ]
 
     # Filter data: exclude unwanted fields and non-scalar types (lists/dicts)
@@ -50,6 +52,7 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
         value_str = value.strftime("%Y-%m-%d") if isinstance(value, datetime) else str(value)
 
         # Define rectangles for key and value cells
+        # Adjusted x0 for textboxes to include padding
         key_rect = fitz.Rect(x0, y0, x0 + col1_width, y0 + row_height)
         value_rect = fitz.Rect(x0 + col1_width, y0, x0 + col1_width + col2_width, y0 + row_height)
 
@@ -58,11 +61,19 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
 
         # Draw key cell
         page.draw_rect(key_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5) # Gray border, fill color
-        page.insert_textbox(key_rect, key, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT) # Align text to left
+        # NEW: Adjust the textbox rectangle for padding
+        page.insert_textbox(
+            fitz.Rect(key_rect.x0 + text_padding_left, key_rect.y0, key_rect.x1, key_rect.y1),
+            key, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT
+        )
 
         # Draw value cell
         page.draw_rect(value_rect, color=(0.7, 0.7, 0.7), fill=fill_color, width=0.5) # Gray border, fill color
-        page.insert_textbox(value_rect, value_str, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT) # Align text to left
+        # NEW: Adjust the textbox rectangle for padding
+        page.insert_textbox(
+            fitz.Rect(value_rect.x0 + text_padding_left, value_rect.y0, value_rect.x1, value_rect.y1),
+            value_str, fontsize=font_size, fontname="helv", align=fitz.TEXT_ALIGN_LEFT
+        )
 
         y0 += row_height # Move down for the next row
 
@@ -136,15 +147,14 @@ def render_shipments(df):
                         "Date Submitted": shipment_row.get("Date Submitted", ""),
                         "Transporter": shipment_row.get("Transporter", ""),
                         "Transporter Details": shipment_row.get("Transporter Details", ""),
+                        "Transporter Contact Details": shipment_row.get("Transporter Contact Details", ""),
                         "Client": shipment_row.get("Client", ""),
                         "Cargo Type": shipment_row.get("Cargo Type", ""),
                         "Loading Point": shipment_row.get("Loading Point", ""),
                         "Offloading Point": shipment_row.get("Offloading Point", ""),
                         "Tonnage": shipment_row.get("Tonnage", ""),
                         "File Number": shipment_row.get("File Number", ""),
-                        "Issued By": shipment_row.get("Issued By", ""),
                         "Truck Count": shipment_row.get("Truck Count", ""),
-                        "Transporter Contact Details": shipment_row.get("Transporter Contact Details", ""),
                         "Agent Details (Country 1)": shipment_row.get("Agent Details (Country 1)", ""),
                         "Agent Details (Country 2)": shipment_row.get("Agent Details (Country 2)", ""),
                         "Payment Terms": shipment_row.get("Payment Terms", ""),
