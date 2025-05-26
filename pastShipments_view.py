@@ -31,7 +31,7 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     exclude_fields = [
         'Trucks', 'Borders', 'Unique ID', 'Trailers', '_id',
         'Agent Details (Country 1)', 'Agent Details (Country 2)', 'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate',
-        'Escorts arranged', 'Loading Capacity', 'Comments'
+        'Escorts arranged', 'Loading Capacity', 'Comments', 'Client', 'Payment Terms', 'Payment Method',
     ]
 
     # Filter data: exclude unwanted fields and non-scalar types (lists/dicts)
@@ -148,7 +148,6 @@ def render_shipments(df):
                         "Transporter": shipment_row.get("Transporter", ""),
                         "Transporter Details": shipment_row.get("Transporter Details", ""),
                         "Transporter Contact Details": shipment_row.get("Transporter Contact Details", ""),
-                        "Client": shipment_row.get("Client", ""),
                         "Cargo Type": shipment_row.get("Cargo Type", ""),
                         "Loading Point": shipment_row.get("Loading Point", ""),
                         "Offloading Point": shipment_row.get("Offloading Point", ""),
@@ -157,7 +156,6 @@ def render_shipments(df):
                         "Truck Count": shipment_row.get("Truck Count", ""),
                         "Agent Details (Country 1)": shipment_row.get("Agent Details (Country 1)", ""),
                         "Agent Details (Country 2)": shipment_row.get("Agent Details (Country 2)", ""),
-                        "Payment Terms": shipment_row.get("Payment Terms", ""),
                         "Load Start Date": shipment_row.get("Load Start Date", ""),
                         "Load End Date": shipment_row.get("Load End Date", ""),
                         "Rate per Ton": shipment_row.get("Rate per Ton", ""),
