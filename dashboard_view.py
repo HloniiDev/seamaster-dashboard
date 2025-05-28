@@ -39,8 +39,7 @@ def render_dashboard(df):
             if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
                 start, end = date_range
                 start_dt = datetime.combine(start, datetime.min.time())
-                # FIX: changed datetime.max().time() to datetime.max.time()
-                end_dt = datetime.combine(end, datetime.max.time()) # Use max time for end of day
+                end_dt = datetime.combine(end, datetime.max.time())
                 df_filtered = df_filtered[
                     (df_filtered["Date Submitted"] >= start_dt) &
                     (df_filtered["Date Submitted"] <= end_dt)
@@ -71,7 +70,7 @@ def render_dashboard(df):
 
     total_shipments = df_filtered["Unique ID"].nunique() if "Unique ID" in df_filtered.columns else 0
     total_trucks = 0
-    total_demurrage_costs_sum = 0 # This will be the grand total across all LP and Border demurrage
+    total_demurrage_costs_sum = 0
     total_days_on_site = 0
     truck_count_for_avg_days = 0
 
@@ -93,19 +92,20 @@ def render_dashboard(df):
                 truck_number = truck_copy.get('Truck Number', 'N/A')
 
                 # --- Calculate Billable days at Loading Point & Demurrage cost at Loading Point ---
-                loaded_date_str = truck_copy.get("Loaded Date")
+                # --- FIX 2: Use "Arrived at Loading point" for loading point demurrage calculation ---
+                arrived_lp_date_str = truck_copy.get("Arrived at Loading point")
                 dispatch_date_lp_str = truck_copy.get("Dispatch date")
                 free_days_lp = int(truck_copy.get("Free Days at Loading Point", 0) or 0)
 
-                loaded_dt_lp = pd.to_datetime(loaded_date_str, errors='coerce')
+                arrived_lp_dt = pd.to_datetime(arrived_lp_date_str, errors='coerce')
                 dispatch_dt_lp = pd.to_datetime(dispatch_date_lp_str, errors='coerce')
 
                 billable_days_lp = 0
                 demurrage_cost_lp = 0.0
 
-                if pd.notna(loaded_dt_lp):
+                if pd.notna(arrived_lp_dt):
                     end_date_lp_calc = dispatch_dt_lp if pd.notna(dispatch_dt_lp) else pd.Timestamp(datetime.now())
-                    days_at_loading = (end_date_lp_calc.floor('D') - loaded_dt_lp.floor('D')).days
+                    days_at_loading = (end_date_lp_calc.floor('D') - arrived_lp_dt.floor('D')).days
 
                     billable_days_lp = max(0, days_at_loading - free_days_lp)
                     demurrage_cost_lp = billable_days_lp * demurrage_rate_truck
@@ -114,15 +114,13 @@ def render_dashboard(df):
                 truck_copy["Demurrage cost at Loading Point"] = demurrage_cost_lp
 
 
-                # --- NEW: Calculate Billable days and Demurrage cost per Border ---
-                total_overall_billable_days_at_all_borders = 0 # Accumulator for this truck's total border billable days
-                total_overall_demurrage_cost_at_all_borders = 0.0 # Accumulator for this truck's total border demurrage cost
+                # --- Calculate Billable days and Demurrage cost per Border ---
+                total_overall_billable_days_at_all_borders = 0
+                total_overall_demurrage_cost_at_all_borders = 0.0
 
                 free_days_border = int(truck_copy.get("Free Days at Border", 0) or 0)
                 
-                # Identify unique border names and their arrival/dispatch keys
-                # This will be used to ensure we process borders in a consistent order
-                border_names_and_keys = {} # { "Border Name": ("Actual arrival at Border Name", "Actual dispatch from Border Name") }
+                border_names_and_keys = {}
                 if "Borders" in truck_copy and isinstance(truck_copy["Borders"], dict):
                     for key in truck_copy["Borders"].keys():
                         if "actual arrival at" in key.lower():
@@ -130,11 +128,14 @@ def render_dashboard(df):
                             border_names_and_keys[name_part] = (key, f"Actual dispatch from {name_part}")
                         elif "actual dispatch from" in key.lower():
                             name_part = key.replace("Actual dispatch from ", "").strip()
-                            if name_part not in border_names_and_keys: # Ensure arrival key is primary
+                            if name_part not in border_names_and_keys:
                                 border_names_and_keys[name_part] = (f"Actual arrival at {name_part}", key)
                 
-                # Sort border names alphabetically for consistent column order
-                sorted_unique_border_names = sorted(list(border_names_and_keys.keys()))
+                def natural_sort_key(s):
+                    import re
+                    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+
+                sorted_unique_border_names = sorted(list(border_names_and_keys.keys()), key=natural_sort_key)
 
                 for border_name in sorted_unique_border_names:
                     arrival_key, dispatch_key = border_names_and_keys[border_name]
@@ -149,7 +150,6 @@ def render_dashboard(df):
                         end_date_border_calc = border_dispatch_dt if pd.notna(border_dispatch_dt) else pd.Timestamp(datetime.now())
                         days_at_this_border_raw = (end_date_border_calc.floor('D') - border_arrival_dt.floor('D')).days
                         
-                        # Apply free days *per border* as per new instruction interpretation
                         billable_days_at_this_individual_border = max(0, days_at_this_border_raw - free_days_border)
                         demurrage_cost_at_this_individual_border = billable_days_at_this_individual_border * demurrage_rate_truck
 
@@ -159,12 +159,10 @@ def render_dashboard(df):
                     total_overall_billable_days_at_all_borders += billable_days_at_this_individual_border
                     total_overall_demurrage_cost_at_all_borders += demurrage_cost_at_this_individual_border
 
-                # Store the new total border demurrage columns
                 truck_copy["Total Billable days at Borders"] = total_overall_billable_days_at_all_borders
                 truck_copy["Total Demurrage cost at Border"] = total_overall_demurrage_cost_at_all_borders
 
 
-                # Sum up all demurrage for grand total metric
                 total_demurrage_costs_sum += demurrage_cost_lp + total_overall_demurrage_cost_at_all_borders
 
                 if "Days on site" in truck_copy and pd.notna(truck_copy["Days on site"]):
@@ -196,14 +194,17 @@ def render_dashboard(df):
     else:
         st.warning("'Date Submitted' column missing or invalid for sorting in grouped_df.")
 
-    # Helper to get unique border names from a single truck's borders dict
     def get_unique_border_names_from_truck(truck):
         border_names = set()
         if "Borders" in truck and isinstance(truck["Borders"], dict):
             for key in truck["Borders"].keys():
                 if "actual arrival at" in key.lower():
                     border_names.add(key.replace("Actual arrival at ", "").strip())
-        return sorted(list(border_names)) # Ensure consistent order for generated columns
+        
+        import re
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+        return sorted(list(border_names), key=natural_sort_key)
 
 
     for _, row in grouped_df.iterrows():
@@ -214,25 +215,21 @@ def render_dashboard(df):
         date_submitted = row.get("Date Submitted")
         truck_count = len(trucks)
 
-        # Logic for status based on truck completion
         all_offloaded = all(truck.get("Date offloaded") for truck in trucks) if trucks else False
         
-        # Check if all trucks that have border data have dispatched from their *last* border
         all_dispatched_from_borders = True
         if trucks:
             for truck in trucks:
                 truck_border_names = get_unique_border_names_from_truck(truck)
-                if truck_border_names: # If this truck has any borders
-                    # Check if the last border in the sorted list has a dispatch date
+                if truck_border_names:
                     last_border_name = truck_border_names[-1]
                     dispatch_key = f"Actual dispatch from {last_border_name}"
                     if not (truck.get("Borders", {}) and pd.notna(truck["Borders"].get(dispatch_key))):
                         all_dispatched_from_borders = False
-                        break # Found a truck not fully dispatched from borders
+                        break
         else:
-            all_dispatched_from_borders = False # No trucks, so not all dispatched
+            all_dispatched_from_borders = False
 
-        # Partial dispatch: if some trucks have dispatched from *any* border, but not all are offloaded or fully dispatched
         partial_dispatch = any(any(f"Actual dispatch from {bn}" in truck.get("Borders", {}) and pd.notna(truck.get("Borders", {}).get(f"Actual dispatch from {bn}")) for bn in get_unique_border_names_from_truck(truck)) for truck in trucks) and not all_offloaded and not all_dispatched_from_borders
 
 
@@ -257,7 +254,6 @@ def render_dashboard(df):
                 active_trucks = [t.copy() for t in trucks if not t.get("Cancel")]
                 cancelled_trucks = [t.copy() for t in trucks if t.get("Cancel")]
 
-                # Helper function to get all unique keys from a nested dictionary field (like "Trailers")
                 def get_all_unique_keys_from_nested_dict(trucks_list, parent_key):
                     all_keys = set()
                     for t in trucks_list:
@@ -265,20 +261,19 @@ def render_dashboard(df):
                             all_keys.update(t[parent_key].keys())
                     return sorted(list(all_keys))
 
-                # Combine active and cancelled trucks to ensure all possible columns are considered
                 all_trucks_combined = active_trucks + cancelled_trucks
 
                 trailer_keys_all_possible = get_all_unique_keys_from_nested_dict(all_trucks_combined, "Trailers")
                 
-                # Dynamically generate border-specific columns based on all unique border names
                 all_border_names_unique = set()
                 for truck_data in all_trucks_combined:
                     all_border_names_unique.update(get_unique_border_names_from_truck(truck_data))
                 
-                # Sort them for consistent display order
-                sorted_all_border_names = sorted(list(all_border_names_unique))
+                import re
+                def natural_sort_key(s):
+                    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+                sorted_all_border_names = sorted(list(all_border_names_unique), key=natural_sort_key)
 
-                # Generate the full list of border display columns in desired order
                 border_display_columns = []
                 for border_name in sorted_all_border_names:
                     border_display_columns.append(f"Actual arrival at {border_name}")
@@ -287,29 +282,31 @@ def render_dashboard(df):
                     border_display_columns.append(f"Demurrage cost at {border_name}")
 
 
-                # Define the base desired columns
-                desired_columns_base = [
-                    "Truck Number", "Horse Number",
+                # Define the insertion point for trailers
+                base_columns_prefix = [
+                    "Truck Number", "Horse Number"
+                ]
+                base_columns_suffix = [
                     "Driver Name", "Passport NO.", "Contact NO.",
                     "Tonnage", "ETA", "Status", "Cargo Description",
                     "Current Location", "Load Location", "Destination",
                     "Arrived at Loading point", "Loaded Date", "Dispatch date",
-                    "Billable days at Loading Point", "Demurrage cost at Loading Point" # "Free Days at Loading Point" removed
-                ]
-                # Columns that will always appear after all specific border events
-                demurrage_summary_columns = [
-                    "Date Arrived", "Date offloaded", # "Free Days at Border" removed
-                    "Total Billable days at Borders", "Total Demurrage cost at Border", # New total border columns
-                    "Cancel", "Flag", "Comment"
+                    "Billable days at Loading Point", "Demurrage cost at Loading Point"
                 ]
 
-                # Combine all desired columns in the preferred order
-                desired_columns = list(dict.fromkeys(
-                    desired_columns_base +
-                    trailer_keys_all_possible +      # Trailer columns (alphabetical)
-                    border_display_columns +         # ALL border specific columns (in alphabetical border name order)
-                    demurrage_summary_columns        # Demurrage summary and other final columns
-                ))
+                # --- FIX 1: Correctly combine and insert trailer columns ---
+                desired_columns = (
+                    base_columns_prefix +
+                    trailer_keys_all_possible +      # Trailer columns now correctly placed
+                    base_columns_suffix +
+                    border_display_columns +
+                    [
+                        "Date Arrived", "Date offloaded",
+                        "Total Billable days at Borders", "Total Demurrage cost at Border",
+                        "Cancel", "Flag", "Comment"
+                    ]
+                )
+                desired_columns = list(dict.fromkeys(desired_columns))
 
 
                 if active_trucks:
@@ -318,7 +315,6 @@ def render_dashboard(df):
                     cleaned_data = []
                     for truck_data in active_trucks:
                         row = {}
-                        # Initialize all potential dynamic columns to empty string to avoid KeyError
                         for border_name in sorted_all_border_names:
                             row[f"Actual arrival at {border_name}"] = ""
                             row[f"Actual dispatch from {border_name}"] = ""
@@ -331,15 +327,13 @@ def render_dashboard(df):
                         for col in desired_columns:
                             if col in ["Cancel", "Flag"]:
                                 row[col] = bool(truck_data.get(col, False))
-                            elif col in truck_data.get("Trailers", {}): # Check if col is a trailer key
+                            elif col in truck_data.get("Trailers", {}):
                                 row[col] = truck_data.get("Trailers", {}).get(col, "")
                             elif col.startswith("Actual arrival at ") or col.startswith("Actual dispatch from "):
-                                # This handles existing border keys from the 'Borders' nested dict
                                 if "Borders" in truck_data and isinstance(truck_data["Borders"], dict):
                                     row[col] = truck_data["Borders"].get(col, "")
                             elif col.startswith("Billable days at ") or col.startswith("Demurrage cost at ") or \
                                 col == "Total Billable days at Borders" or col == "Total Demurrage cost at Border":
-                                # This handles dynamically calculated border demurrage columns and new totals
                                 row[col] = truck_data.get(col, "")
                             else:
                                 row[col] = truck_data.get(col, "")
@@ -361,7 +355,6 @@ def render_dashboard(df):
                             pd.to_numeric(active_df[col], errors="coerce")
                             .apply(lambda x: f"{x:,.2f}" if pd.notna(x) else ("" if "cost" in col.lower() else ""))
                         )
-                        # For Billable/Demurrage costs, ensure they are 2 decimal places and prefixed with R if applicable
                         if "cost" in col.lower():
                             active_df[col] = active_df[col].apply(lambda x: f"R {x}" if x not in ["", None, "R "] else "")
 
@@ -391,7 +384,6 @@ def render_dashboard(df):
                     cleaned_data = []
                     for truck_data in cancelled_trucks:
                         row = {}
-                        # Initialize all potential dynamic columns to empty string to avoid KeyError
                         for border_name in sorted_all_border_names:
                             row[f"Actual arrival at {border_name}"] = ""
                             row[f"Actual dispatch from {border_name}"] = ""
