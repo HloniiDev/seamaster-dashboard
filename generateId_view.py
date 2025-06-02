@@ -222,6 +222,7 @@ def render_generateID(df):
                 "Transporter": transporter, "Transporter Details": transporter_details,"Transporter Contact Details": transporter_contact, "Cargo Type": cargo,
                 "Loading Point": loading_point, "Offloading Point": offloading_point,
                 "Tonnage": tonnage,
+                "Client": client_name,
                 "File Number": file_number, "Issued By": issued_by,
                 "Truck Count": truck_count, 
                 "Agent Details (Country 1)": agent_details_country1,
