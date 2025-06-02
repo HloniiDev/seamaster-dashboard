@@ -92,13 +92,33 @@ def render_dashboard(df):
                 truck_number = truck_copy.get('Truck Number', 'N/A')
 
                 # --- Calculate Billable days at Loading Point & Demurrage cost at Loading Point ---
-                # --- FIX 2: Use "Arrived at Loading point" for loading point demurrage calculation ---
                 arrived_lp_date_str = truck_copy.get("Arrived at Loading point")
                 dispatch_date_lp_str = truck_copy.get("Dispatch date")
                 free_days_lp = int(truck_copy.get("Free Days at Loading Point", 0) or 0)
 
-                arrived_lp_dt = pd.to_datetime(arrived_lp_date_str, errors='coerce')
-                dispatch_dt_lp = pd.to_datetime(dispatch_date_lp_str, errors='coerce')
+                # Refined Robust parsing of Arrived at Loading point for calculations
+                arrived_lp_dt = None
+                if arrived_lp_date_str is not None and str(arrived_lp_date_str).strip() != '':
+                    try:
+                        if isinstance(arrived_lp_date_str, (int, float)):
+                            arrived_lp_dt = pd.to_datetime(arrived_lp_date_str, unit='ms', errors='coerce')
+                        else: # Assume string
+                            arrived_lp_dt = pd.to_datetime(arrived_lp_date_str, errors='coerce')
+                    except Exception as e:
+                        st.warning(f"Could not parse 'Arrived at Loading point' for truck {truck_number}: {arrived_lp_date_str}. Error: {e}")
+                        arrived_lp_dt = pd.NaT # Set to NaT if parsing fails
+
+                dispatch_dt_lp = None
+                if dispatch_date_lp_str is not None and str(dispatch_date_lp_str).strip() != '':
+                    try:
+                        if isinstance(dispatch_date_lp_str, (int, float)):
+                            dispatch_dt_lp = pd.to_datetime(dispatch_date_lp_str, unit='ms', errors='coerce')
+                        else:
+                            dispatch_dt_lp = pd.to_datetime(dispatch_date_lp_str, errors='coerce')
+                    except Exception as e:
+                        st.warning(f"Could not parse 'Dispatch date' (LP) for truck {truck_number}: {dispatch_date_lp_str}. Error: {e}")
+                        dispatch_dt_lp = pd.NaT
+
 
                 billable_days_lp = 0
                 demurrage_cost_lp = 0.0
@@ -119,29 +139,45 @@ def render_dashboard(df):
                 total_overall_demurrage_cost_at_all_borders = 0.0
 
                 free_days_border = int(truck_copy.get("Free Days at Border", 0) or 0)
-                
-                border_names_and_keys = {}
+
+                # Logic to preserve border order from the 'Borders' object
+                ordered_border_names_and_keys = []
                 if "Borders" in truck_copy and isinstance(truck_copy["Borders"], dict):
+                    seen_border_names = set()
                     for key in truck_copy["Borders"].keys():
                         if "actual arrival at" in key.lower():
                             name_part = key.replace("Actual arrival at ", "").strip()
-                            border_names_and_keys[name_part] = (key, f"Actual dispatch from {name_part}")
-                        elif "actual dispatch from" in key.lower():
-                            name_part = key.replace("Actual dispatch from ", "").strip()
-                            if name_part not in border_names_and_keys:
-                                border_names_and_keys[name_part] = (f"Actual arrival at {name_part}", key)
+                            if name_part not in seen_border_names:
+                                ordered_border_names_and_keys.append((name_part, key, f"Actual dispatch from {name_part}"))
+                                seen_border_names.add(name_part)
                 
-                def natural_sort_key(s):
-                    import re
-                    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+                for border_name, arrival_key, dispatch_key in ordered_border_names_and_keys:
+                    # Refined Robust parsing for border dates for calculations
+                    border_arrival_val = truck_copy["Borders"].get(arrival_key)
+                    border_dispatch_val = truck_copy["Borders"].get(dispatch_key)
 
-                sorted_unique_border_names = sorted(list(border_names_and_keys.keys()), key=natural_sort_key)
+                    border_arrival_dt = None
+                    if border_arrival_val is not None and str(border_arrival_val).strip() != '':
+                        try:
+                            if isinstance(border_arrival_val, (int, float)):
+                                border_arrival_dt = pd.to_datetime(border_arrival_val, unit='ms', errors='coerce')
+                            else:
+                                border_arrival_dt = pd.to_datetime(border_arrival_val, errors='coerce')
+                        except Exception as e:
+                            st.warning(f"Could not parse 'Actual arrival at {border_name}' for truck {truck_number}: {border_arrival_val}. Error: {e}")
+                            border_arrival_dt = pd.NaT
 
-                for border_name in sorted_unique_border_names:
-                    arrival_key, dispatch_key = border_names_and_keys[border_name]
+                    border_dispatch_dt = None
+                    if border_dispatch_val is not None and str(border_dispatch_val).strip() != '':
+                        try:
+                            if isinstance(border_dispatch_val, (int, float)):
+                                border_dispatch_dt = pd.to_datetime(border_dispatch_val, unit='ms', errors='coerce')
+                            else:
+                                border_dispatch_dt = pd.to_datetime(border_dispatch_val, errors='coerce')
+                        except Exception as e:
+                            st.warning(f"Could not parse 'Actual dispatch from {border_name}' for truck {truck_number}: {border_dispatch_val}. Error: {e}")
+                            border_dispatch_dt = pd.NaT
 
-                    border_arrival_dt = pd.to_datetime(truck_copy["Borders"].get(arrival_key), errors='coerce')
-                    border_dispatch_dt = pd.to_datetime(truck_copy["Borders"].get(dispatch_key), errors='coerce')
 
                     billable_days_at_this_individual_border = 0
                     demurrage_cost_at_this_individual_border = 0.0
@@ -194,17 +230,17 @@ def render_dashboard(df):
     else:
         st.warning("'Date Submitted' column missing or invalid for sorting in grouped_df.")
 
-    def get_unique_border_names_from_truck(truck):
-        border_names = set()
+    def get_ordered_unique_border_names_from_truck(truck):
+        ordered_border_names = []
         if "Borders" in truck and isinstance(truck["Borders"], dict):
+            seen_names = set()
             for key in truck["Borders"].keys():
                 if "actual arrival at" in key.lower():
-                    border_names.add(key.replace("Actual arrival at ", "").strip())
-        
-        import re
-        def natural_sort_key(s):
-            return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
-        return sorted(list(border_names), key=natural_sort_key)
+                    name_part = key.replace("Actual arrival at ", "").strip()
+                    if name_part not in seen_names:
+                        ordered_border_names.append(name_part)
+                        seen_names.add(name_part)
+        return ordered_border_names
 
 
     for _, row in grouped_df.iterrows():
@@ -220,7 +256,7 @@ def render_dashboard(df):
         all_dispatched_from_borders = True
         if trucks:
             for truck in trucks:
-                truck_border_names = get_unique_border_names_from_truck(truck)
+                truck_border_names = get_ordered_unique_border_names_from_truck(truck)
                 if truck_border_names:
                     last_border_name = truck_border_names[-1]
                     dispatch_key = f"Actual dispatch from {last_border_name}"
@@ -230,7 +266,7 @@ def render_dashboard(df):
         else:
             all_dispatched_from_borders = False
 
-        partial_dispatch = any(any(f"Actual dispatch from {bn}" in truck.get("Borders", {}) and pd.notna(truck.get("Borders", {}).get(f"Actual dispatch from {bn}")) for bn in get_unique_border_names_from_truck(truck)) for truck in trucks) and not all_offloaded and not all_dispatched_from_borders
+        partial_dispatch = any(any(f"Actual dispatch from {bn}" in truck.get("Borders", {}) and pd.notna(truck.get("Borders", {}).get(f"Actual dispatch from {bn}")) for bn in get_ordered_unique_border_names_from_truck(truck)) for truck in trucks) and not all_offloaded and not all_dispatched_from_borders
 
 
         if not trucks:
@@ -244,7 +280,8 @@ def render_dashboard(df):
         else:
             status_icon, label = "🔴", "Pending Dispatch"
 
-        submitted_str = date_submitted.strftime("%Y-%m-%d %H:%M") if pd.notna(date_submitted) else "N/A"
+        # *** MODIFIED: Changed strftime format to remove timestamp ***
+        submitted_str = date_submitted.strftime("%Y-%m-%d") if pd.notna(date_submitted) else "N/A"
         header = f"{status_icon} **{uid}** | 🏢 {client} | 🚚 {transporter} | 🛻 Trucks: {truck_count} | 🕒 {submitted_str} — *{label}*"
 
         with st.expander(header):
@@ -259,23 +296,25 @@ def render_dashboard(df):
                     for t in trucks_list:
                         if parent_key in t and isinstance(t[parent_key], dict):
                             all_keys.update(t[parent_key].keys())
-                    return sorted(list(all_keys))
+                    return list(all_keys)
 
                 all_trucks_combined = active_trucks + cancelled_trucks
 
                 trailer_keys_all_possible = get_all_unique_keys_from_nested_dict(all_trucks_combined, "Trailers")
                 
-                all_border_names_unique = set()
+                all_border_names_ordered_globally = []
+                seen_global_border_names = set()
                 for truck_data in all_trucks_combined:
-                    all_border_names_unique.update(get_unique_border_names_from_truck(truck_data))
+                    if "Borders" in truck_data and isinstance(truck_data["Borders"], dict):
+                        for key in truck_data["Borders"].keys():
+                            if "actual arrival at" in key.lower():
+                                name_part = key.replace("Actual arrival at ", "").strip()
+                                if name_part not in seen_global_border_names:
+                                    all_border_names_ordered_globally.append(name_part)
+                                    seen_global_border_names.add(name_part)
                 
-                import re
-                def natural_sort_key(s):
-                    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
-                sorted_all_border_names = sorted(list(all_border_names_unique), key=natural_sort_key)
-
                 border_display_columns = []
-                for border_name in sorted_all_border_names:
+                for border_name in all_border_names_ordered_globally:
                     border_display_columns.append(f"Actual arrival at {border_name}")
                     border_display_columns.append(f"Actual dispatch from {border_name}")
                     border_display_columns.append(f"Billable days at {border_name}")
@@ -294,10 +333,9 @@ def render_dashboard(df):
                     "Billable days at Loading Point", "Demurrage cost at Loading Point"
                 ]
 
-                # --- FIX 1: Correctly combine and insert trailer columns ---
                 desired_columns = (
                     base_columns_prefix +
-                    trailer_keys_all_possible +      # Trailer columns now correctly placed
+                    trailer_keys_all_possible +
                     base_columns_suffix +
                     border_display_columns +
                     [
@@ -309,13 +347,34 @@ def render_dashboard(df):
                 desired_columns = list(dict.fromkeys(desired_columns))
 
 
+                # Helper function for consistent date formatting
+                def format_date_for_display(value):
+                    if value is None or (isinstance(value, str) and value.strip() == ''):
+                        return ""
+                    try:
+                        if isinstance(value, (int, float)):
+                            dt_obj = pd.to_datetime(value, unit='ms', errors='coerce')
+                        else: # Assume string
+                            dt_obj = pd.to_datetime(value, errors='coerce')
+                        
+                        if pd.notna(dt_obj):
+                            # *** MODIFIED: Changed strftime format to remove timestamp ***
+                            return dt_obj.strftime("%Y-%m-%d") 
+                        else:
+                            return ""
+                    except Exception as e:
+                        # You can add more specific logging here if needed
+                        # st.warning(f"Error parsing date '{value}': {e}")
+                        return str(value) # Fallback to original value string representation if all else fails
+
+
                 if active_trucks:
                     st.markdown("### ✅ Active Trucks")
 
                     cleaned_data = []
                     for truck_data in active_trucks:
                         row = {}
-                        for border_name in sorted_all_border_names:
+                        for border_name in all_border_names_ordered_globally:
                             row[f"Actual arrival at {border_name}"] = ""
                             row[f"Actual dispatch from {border_name}"] = ""
                             row[f"Billable days at {border_name}"] = ""
@@ -331,7 +390,10 @@ def render_dashboard(df):
                                 row[col] = truck_data.get("Trailers", {}).get(col, "")
                             elif col.startswith("Actual arrival at ") or col.startswith("Actual dispatch from "):
                                 if "Borders" in truck_data and isinstance(truck_data["Borders"], dict):
-                                    row[col] = truck_data["Borders"].get(col, "")
+                                    row[col] = format_date_for_display(truck_data["Borders"].get(col))
+                            # Apply the helper function for other direct date columns
+                            elif col in ["Arrived at Loading point", "Loaded Date", "Dispatch date", "Date Arrived", "Date offloaded", "ETA"]:
+                                row[col] = format_date_for_display(truck_data.get(col))
                             elif col.startswith("Billable days at ") or col.startswith("Demurrage cost at ") or \
                                 col == "Total Billable days at Borders" or col == "Total Demurrage cost at Border":
                                 row[col] = truck_data.get(col, "")
@@ -340,14 +402,6 @@ def render_dashboard(df):
                         cleaned_data.append(row)
 
                     active_df = pd.DataFrame(cleaned_data)
-
-                    date_cols = [col for col in active_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
-                    for col in date_cols:
-                        active_df[col] = (
-                            pd.to_datetime(active_df[col], errors="coerce")
-                            .dt.strftime("%Y-%m-%d %H:%M")
-                            .fillna("")
-                        )
 
                     num_cols = [col for col in active_df.columns if any(x in col.lower() for x in ["ton", "days", "cost", "rate", "weight"])]
                     for col in num_cols:
@@ -384,7 +438,7 @@ def render_dashboard(df):
                     cleaned_data = []
                     for truck_data in cancelled_trucks:
                         row = {}
-                        for border_name in sorted_all_border_names:
+                        for border_name in all_border_names_ordered_globally:
                             row[f"Actual arrival at {border_name}"] = ""
                             row[f"Actual dispatch from {border_name}"] = ""
                             row[f"Billable days at {border_name}"] = ""
@@ -399,7 +453,10 @@ def render_dashboard(df):
                                 row[col] = truck_data.get("Trailers", {}).get(col, "")
                             elif col.startswith("Actual arrival at ") or col.startswith("Actual dispatch from "):
                                 if "Borders" in truck_data and isinstance(truck_data["Borders"], dict):
-                                    row[col] = truck_data["Borders"].get(col, "")
+                                    row[col] = format_date_for_display(truck_data["Borders"].get(col))
+                            # Apply the helper function for other direct date columns
+                            elif col in ["Arrived at Loading point", "Loaded Date", "Dispatch date", "Date Arrived", "Date offloaded", "ETA"]:
+                                row[col] = format_date_for_display(truck_data.get(col))
                             elif col.startswith("Billable days at ") or col.startswith("Demurrage cost at ") or \
                                 col == "Total Billable days at Borders" or col == "Total Demurrage cost at Border":
                                 row[col] = truck_data.get(col, "")
@@ -408,14 +465,6 @@ def render_dashboard(df):
                         cleaned_data.append(row)
 
                     cancelled_df = pd.DataFrame(cleaned_data)
-
-                    date_cols = [col for col in cancelled_df.columns if any(s in col.lower() for s in ["date", "arrival", "dispatch", "eta"])]
-                    for col in date_cols:
-                        cancelled_df[col] = (
-                            pd.to_datetime(cancelled_df[col], errors="coerce")
-                            .dt.strftime("%Y-%m-%d %H:%M")
-                            .fillna("")
-                        )
 
                     num_cols = [col for col in cancelled_df.columns if any(x in col.lower() for x in ["ton", "days", "cost", "rate", "weight"])]
                     for col in num_cols:

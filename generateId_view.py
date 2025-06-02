@@ -206,8 +206,14 @@ def render_generateID(df):
                     "Truck Type": truck_type, "Escorts arranged": escorts_arranged,
                     "Comments": comments
                 }
-                truck_data["Borders"] = {f"Actual arrival at {b}": None for b in borders}
-                truck_data["Borders"].update({f"Actual dispatch from {b}": None for b in borders})
+                
+                # --- MODIFIED SECTION FOR BORDERS ---
+                truck_data["Borders"] = {}
+                for b in borders:
+                    truck_data["Borders"][f"Actual arrival at {b}"] = None
+                    truck_data["Borders"][f"Actual dispatch from {b}"] = None
+                # --- END OF MODIFIED SECTION ---
+
                 trucks_array.append(truck_data)
 
             shipment_data = {
@@ -226,10 +232,15 @@ def render_generateID(df):
                 "Free Days at Border": free_days_border,
                 "Free Days at Loading Point": free_days_loading,
                 "Demurrage Rate": demurrage_rate,
-                "Borders": borders,
                 "Trucks": trucks_array,
                 "Trailers": {t: None for t in trailers}
             }
+            
+            shipment_data["Borders"] = {}
+            for b in borders:
+                    shipment_data["Borders"][f"Actual arrival at {b}"] = None
+                    shipment_data["Borders"][f"Actual dispatch from {b}"] = None
+                # --- END OF MODIFIED SECTION ---
 
             # Save to MongoDB
             shipments_collection.insert_one(shipment_data)
