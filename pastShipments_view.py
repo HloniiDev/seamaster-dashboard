@@ -17,6 +17,13 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
         st.error(f"PDF template file not found at: {template_path}")
         return None # Return None if template is not found
 
+    # Determine shipment type from the provided shipment_data
+    shipment_type = shipment_data.get("Shipment Type", "Unknown") # Default to "Unknown" if not found
+
+    # Remove second page for cross-border shipments if it exists
+    if shipment_type == "Cross-Border" and doc.page_count > 1:
+        doc.delete_page(1) # Deletes the second page (index 1)
+
     page = doc[0]
 
     # Table layout dimensions
@@ -27,12 +34,24 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     font_size = 10
     text_padding_left = 5 # NEW: Padding for text inside cells
 
-    # Fields to exclude from the PDF table
+    # Fields to exclude from the PDF table by default for ALL shipment types
     exclude_fields = [
         'Trucks', 'Borders', 'Unique ID', 'Trailers', '_id',
-        'Agent Details (Country 1)', 'Agent Details (Country 2)', 'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate',
-        'Escorts arranged', 'Loading Capacity', 'Comments', 'Client', 'Payment Terms', 'Payment Method',
+        'Escorts arranged', 'Loading Capacity', 'Comments',
+        'Client', 'Issued By', 'Payment Terms', 'Payment Method', # <-- These were in your provided code's exclude list
+        'Shipment Type' # Exclude the Shipment Type field itself from the PDF table
     ]
+
+    # Add type-specific exclusions/inclusions
+    if shipment_type == "Local":
+        exclude_fields.extend([
+            'Agent Details (Country 1)', 'Agent Details (Country 2)',
+            'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate'
+        ])
+    # For 'Cross-Border', we don't add anything to exclude_fields here
+    # because the fields like Agent Details, Free Days, Demurrage Rate should be included.
+    # The initial exclude_fields already handles the always-excluded ones.
+
 
     # Filter data: exclude unwanted fields and non-scalar types (lists/dicts)
     filtered_data = {
@@ -50,6 +69,13 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     for idx, (key, value) in enumerate(filtered_data.items()):
         # Format datetime objects to string
         value_str = value.strftime("%Y-%m-%d") if isinstance(value, datetime) else str(value)
+
+        # Add currency sign to Rate per Ton
+        if key == "Rate per Ton":
+            if shipment_type == "Local":
+                value_str = f"R {float(value):.2f}"
+            elif shipment_type == "Cross-Border":
+                value_str = f"$ {float(value):.2f}"
 
         # Define rectangles for key and value cells
         # Adjusted x0 for textboxes to include padding
@@ -113,7 +139,7 @@ def render_shipments(df):
 
         display_cols = [
             "Unique ID", "Date Submitted", "Transporter", "Client",
-            "Cargo Type", "Loading Point", "File Number", "Truck Count"
+            "Cargo Type", "Loading Point", "File Number", "Truck Count", "Shipment Type" # Added Shipment Type to display
         ]
         display_cols_present = [col for col in display_cols if col in metadata_table.columns]
         metadata_table_display = metadata_table[display_cols_present].copy()
@@ -142,6 +168,7 @@ def render_shipments(df):
                     )
 
                     # Extract all relevant fields into a dictionary for PDF generation
+                    # It's crucial that "Shipment Type" is included here so generate_pdf_with_template can read it
                     shipment_data = {
                         "Unique ID": shipment_row.get("Unique ID", ""),
                         "Date Submitted": shipment_row.get("Date Submitted", ""),
@@ -163,15 +190,17 @@ def render_shipments(df):
                         "Free Days at Border": shipment_row.get("Free Days at Border", ""),
                         "Free Days at Loading Point": shipment_row.get("Free Days at Loading Point", ""),
                         "Demurrage Rate": shipment_row.get("Demurrage Rate", ""),
-                        # These fields are included here in the dict but will be filtered out by `generate_pdf_with_template`
                         "Escorts arranged": shipment_row.get("Escorts arranged", ""),
                         "Loading Capacity": shipment_row.get("Loading Capacity", ""),
                         "Comments": shipment_row.get("Comments", ""),
-                        # Ensure lists/dicts are handled appropriately if you want them in PDF
-                        # For now, they are excluded by generate_pdf_with_template's filter
+                        "Client": shipment_row.get("Client", ""), # Ensure Client is pulled from DB
+                        "Issued By": shipment_row.get("Issued By", ""), # Ensure Issued By is pulled from DB
+                        "Payment Terms": shipment_row.get("Payment Terms", ""), # Ensure Payment Terms is pulled from DB
+                        "Payment Method": shipment_row.get("Payment Method", ""), # Ensure Payment Method is pulled from DB
                         "Borders": shipment_row.get("Borders", []),
                         "Trucks": shipment_row.get("Trucks", []),
                         "Trailers": shipment_row.get("Trailers", {}),
+                        "Shipment Type": shipment_row.get("Shipment Type", "Unknown") # <-- CRUCIAL: Get shipment type from DB
                     }
 
                     # --- UNIFIED PDF GENERATION CALL ---

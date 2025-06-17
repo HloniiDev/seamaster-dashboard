@@ -19,7 +19,7 @@ except ConnectionFailure as e:
 
 
 # --- Generate PDF with a Styled Table in the Template ---
-def generate_pdf_with_template(template_path, shipment_data, unique_id):
+def generate_pdf_with_template(template_path, shipment_data, unique_id, shipment_type):
     """
     Generates a PDF based on a template, populating a styled table with shipment data.
     Adjusts text placement within columns for better readability.
@@ -29,6 +29,10 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     except fitz.FileNotFoundError:
         st.error(f"PDF template file not found at: {template_path}")
         return None # Return None if template is not found
+
+    # Remove second page for cross-border shipments if it exists
+    if shipment_type == "Cross-Border" and doc.page_count > 1:
+        doc.delete_page(1) # Deletes the second page (index 1)
 
     page = doc[0]
 
@@ -40,12 +44,25 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     font_size = 10
     text_padding_left = 5 # NEW: Padding for text inside cells
 
-    # Fields to exclude from the PDF table
+    # Fields to exclude from the PDF table by default for ALL shipment types
     exclude_fields = [
         'Trucks', 'Borders', 'Unique ID', 'Trailers', '_id',
-        'Agent Details (Country 1)', 'Agent Details (Country 2)', 'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate',
-        'Escorts arranged', 'Loading Capacity', 'Comments'
+        'Escorts arranged', 'Loading Capacity', 'Comments',
+        'Client', 'Issued By' # <-- ADDED: Exclude Client and Issued By from PDF
     ]
+
+    # Add type-specific exclusions
+    if shipment_type == "Local":
+        exclude_fields.extend([
+            'Agent Details (Country 1)', 'Agent Details (Country 2)',
+            'Free Days at Border', 'Free Days at Loading Point', 'Demurrage Rate'
+        ])
+    elif shipment_type == "Cross-Border":
+        # For Cross-Border, ensure specific fields (Agent Details, Free Days, Demurrage Rate) are NOT excluded if they were in the default list
+        # This part of the logic needs to ensure they are NOT in the final exclude_fields for Cross-Border
+        pass # The default exclude_fields already handles the always-excluded ones.
+             # Fields like Agent Details, Free Days, Demurrage Rate are ONLY added to exclude_fields for 'Local' shipments.
+
 
     # Filter data: exclude unwanted fields and non-scalar types (lists/dicts)
     filtered_data = {
@@ -63,6 +80,13 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
     for idx, (key, value) in enumerate(filtered_data.items()):
         # Format datetime objects to string
         value_str = value.strftime("%Y-%m-%d") if isinstance(value, datetime) else str(value)
+
+        # Add currency sign to Rate per Ton
+        if key == "Rate per Ton":
+            if shipment_type == "Local":
+                value_str = f"R {float(value):.2f}"
+            elif shipment_type == "Cross-Border":
+                value_str = f"$ {float(value):.2f}"
 
         # Define rectangles for key and value cells
         # Adjusted x0 for textboxes to include padding
@@ -102,6 +126,12 @@ def generate_pdf_with_template(template_path, shipment_data, unique_id):
 def render_generateID(df):
     st.markdown("### 🎯 Generate a New Shipment ID")
 
+    shipment_type = st.radio(
+        "Select Shipment Type",
+        ("Local", "Cross-Border"),
+        key="shipment_type_selector"
+    )
+
     st.session_state.num_borders = st.session_state.get("num_borders", 3)
     current_names = st.session_state.get("border_names", [])
     st.session_state.border_names = current_names[:st.session_state.num_borders] + [""] * (
@@ -127,8 +157,12 @@ def render_generateID(df):
     with col3:
         transporter_contact = st.text_input("Transporter Contact Details")
         transporter_details = st.text_area("Transporter Additional Details")
-        agent_details_country1 = st.text_input("Agent Details (Country 1)")
-        agent_details_country2 = st.text_input("Agent Details (Country 2)")
+        if shipment_type == "Cross-Border":
+            agent_details_country1 = st.text_input("Agent Details (Country 1)")
+            agent_details_country2 = st.text_input("Agent Details (Country 2)")
+        else:
+            agent_details_country1 = ""
+            agent_details_country2 = ""
     with col4:
         payment_terms = st.text_input("Payment Terms")
         client_name = st.text_input("Client Name")
@@ -141,9 +175,14 @@ def render_generateID(df):
         rate_per_ton = st.number_input("Rate per Ton", min_value=0.0, step=0.01, format="%.2f")
     with col6:
         truck_type = st.text_input("Truck Type")
-        free_days_border = st.number_input("Free Days at Border", min_value=0)
-        free_days_loading = st.number_input("Free Days at Loading Point", min_value=0)
-        demurrage_rate = st.number_input("Demurrage Rate", min_value=0.0, step=0.01, format="%.2f")
+        if shipment_type == "Cross-Border":
+            free_days_border = st.number_input("Free Days at Border", min_value=0)
+            free_days_loading = st.number_input("Free Days at Loading Point", min_value=0)
+            demurrage_rate = st.number_input("Demurrage Rate", min_value=0.0, step=0.01, format="%.2f")
+        else:
+            free_days_border = 0
+            free_days_loading = 0
+            demurrage_rate = 0.0
 
     st.subheader("Additional Truck Details")
     col7, col8 = st.columns(2)
@@ -153,19 +192,22 @@ def render_generateID(df):
     with col8:
         comments = st.text_area("Comments")
 
-    st.markdown("### 📜 Customize Border Names")
-    cols = st.columns([1, 6, 1])
-    with cols[0]:
-        if st.button("➖ Remove Border") and st.session_state.num_borders > 0:
-            st.session_state.num_borders -= 1
-            st.rerun()
-    with cols[2]:
-        if st.button("➕ Add Border"):
-            st.session_state.num_borders += 1
-            st.rerun()
+    if shipment_type == "Cross-Border":
+        st.markdown("### 📜 Customize Border Names")
+        cols = st.columns([1, 6, 1])
+        with cols[0]:
+            if st.button("➖ Remove Border") and st.session_state.num_borders > 0:
+                st.session_state.num_borders -= 1
+                st.rerun()
+        with cols[2]:
+            if st.button("➕ Add Border"):
+                st.session_state.num_borders += 1
+                st.rerun()
 
-    borders = [st.text_input(f"Name for Border {i+1}", key=f"border_name_{i}").strip()
-               for i in range(st.session_state.num_borders)]
+        borders = [st.text_input(f"Name for Border {i+1}", key=f"border_name_{i}").strip()
+                   for i in range(st.session_state.num_borders)]
+    else:
+        borders = [] # No borders for local shipments
 
     st.markdown("### 🚛 Trailer Setup")
     trailer_count = st.selectbox("Select number of trailers per truck", options=[1, 2])
@@ -208,10 +250,13 @@ def render_generateID(df):
                 }
                 
                 # --- MODIFIED SECTION FOR BORDERS ---
-                truck_data["Borders"] = {}
-                for b in borders:
-                    truck_data["Borders"][f"Actual arrival at {b}"] = None
-                    truck_data["Borders"][f"Actual dispatch from {b}"] = None
+                if shipment_type == "Cross-Border":
+                    truck_data["Borders"] = {}
+                    for b in borders:
+                        truck_data["Borders"][f"Actual arrival at {b}"] = None
+                        truck_data["Borders"][f"Actual dispatch from {b}"] = None
+                else:
+                    truck_data["Borders"] = {} # No borders for local
                 # --- END OF MODIFIED SECTION ---
 
                 trucks_array.append(truck_data)
@@ -225,23 +270,33 @@ def render_generateID(df):
                 "Client": client_name,
                 "File Number": file_number, "Issued By": issued_by,
                 "Truck Count": truck_count, 
-                "Agent Details (Country 1)": agent_details_country1,
-                "Agent Details (Country 2)": agent_details_country2,
                 "Load Start Date": datetime.combine(load_start_date, datetime.min.time()) if load_start_date else None,
                 "Load End Date": datetime.combine(load_end_date, datetime.min.time()) if load_end_date else None,
                 "Rate per Ton": rate_per_ton, "Truck Type": truck_type,
-                "Free Days at Border": free_days_border,
-                "Free Days at Loading Point": free_days_loading,
-                "Demurrage Rate": demurrage_rate,
                 "Trucks": trucks_array,
-                "Trailers": {t: None for t in trailers}
+                "Trailers": {t: None for t in trailers},
+                "Shipment Type": shipment_type # Add shipment type to data
             }
             
-            shipment_data["Borders"] = {}
-            for b in borders:
-                    shipment_data["Borders"][f"Actual arrival at {b}"] = None
-                    shipment_data["Borders"][f"Actual dispatch from {b}"] = None
-                # --- END OF MODIFIED SECTION ---
+            if shipment_type == "Cross-Border":
+                shipment_data["Agent Details (Country 1)"] = agent_details_country1
+                shipment_data["Agent Details (Country 2)"] = agent_details_country2
+                shipment_data["Free Days at Border"] = free_days_border
+                shipment_data["Free Days at Loading Point"] = free_days_loading
+                shipment_data["Demurrage Rate"] = demurrage_rate
+                
+                shipment_data["Borders"] = {}
+                for b in borders:
+                        shipment_data["Borders"][f"Actual arrival at {b}"] = None
+                        shipment_data["Borders"][f"Actual dispatch from {b}"] = None
+            else:
+                shipment_data["Agent Details (Country 1)"] = ""
+                shipment_data["Agent Details (Country 2)"] = ""
+                shipment_data["Free Days at Border"] = 0
+                shipment_data["Free Days at Loading Point"] = 0
+                shipment_data["Demurrage Rate"] = 0.0
+                shipment_data["Borders"] = {} # No borders for local
+
 
             # Save to MongoDB
             shipments_collection.insert_one(shipment_data)
@@ -250,14 +305,16 @@ def render_generateID(df):
             pdf_stream = generate_pdf_with_template(
                 template_path="transport_order_template.pdf",
                 shipment_data=shipment_data,
-                unique_id=unique_id
+                unique_id=unique_id,
+                shipment_type=shipment_type # Pass shipment_type to PDF generator
             )
 
-            st.download_button(
-                label="Download Shipment PDF",
-                data=pdf_stream,
-                file_name=f"shipment_{unique_id}.pdf",
-                mime="application/pdf"
-            )
+            if pdf_stream: # Only offer download if PDF generation was successful
+                st.download_button(
+                    label="Download Shipment PDF",
+                    data=pdf_stream,
+                    file_name=f"shipment_{unique_id}.pdf",
+                    mime="application/pdf"
+                )
 
             st.success("Shipment saved and PDF generated successfully!")
